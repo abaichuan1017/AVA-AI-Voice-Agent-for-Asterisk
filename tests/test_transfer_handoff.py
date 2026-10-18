@@ -47,12 +47,24 @@ def test_filler_completion_does_not_release_but_reply_completion_does():
 
 @pytest.mark.parametrize("text,interrupted,matched", [
     (MESSAGE, False, True), ("WE ARE CLOSED! Please leave a message", False, True),
-    ("Before that: " + MESSAGE, False, True), ("We are closed", False, False),
+    (" \n... WE are CLOSED!  Please leave a message.", False, True),
+    (MESSAGE + " I will connect you now.", False, True),
+    (MESSAGE.rstrip(".") + "box", False, False),
+    ("Before that: " + MESSAGE, False, False), ("We are closed", False, False),
     ("Nous sommes fermés", False, False), (MESSAGE, True, False), ("", False, False),
 ])
-def test_conservative_full_sentence_matching(text, interrupted, matched):
+def test_conservative_normalized_prefix_matching(text, interrupted, matched):
     result = state(turn("origin", 1, text=text, done=True, interrupted=interrupted))
     assert result.sealed is matched
+
+
+def test_later_sentence_in_origin_waits_for_post_tool_reply():
+    result = state(turn("origin", 1, text="Before that: " + MESSAGE, done=True))
+    assert not result.sealed
+    result.observe({"handoff_evidence": turn("reply", 3.5, text=MESSAGE)})
+    assert not result.sealed and result.selected_id == "reply"
+    result.observe({"handoff_evidence": turn("reply", 3.5, text=MESSAGE, done=True)})
+    assert result.sealed and result.reason == "reply_completed"
 
 
 def test_text_without_audio_and_stale_completed_turn_do_not_qualify():

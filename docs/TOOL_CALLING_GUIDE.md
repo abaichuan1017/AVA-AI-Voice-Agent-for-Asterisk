@@ -1274,8 +1274,8 @@ announcement for that target while the global announcement is disabled.
 Disabling the setting restores the existing #702 suppression and drain behavior.
 
 For provider-generated speech, the engine waits before activating the #702
-commit gate. A completed, uninterrupted originating response containing the full
-normalized sentence releases immediately. Otherwise the engine waits for a
+commit gate. A completed, uninterrupted originating response starting with the full
+normalized sentence (on a word boundary) releases immediately. Otherwise the engine waits for a
 response whose audio starts after the tool result was successfully sent. It has
 4 seconds to start and 20 seconds from its first audio to finish by default.
 The respective configurable limits are 10 and 60 seconds. Provider idle timers,

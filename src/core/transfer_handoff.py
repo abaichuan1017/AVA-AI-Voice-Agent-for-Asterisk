@@ -45,7 +45,7 @@ class Announcement:
     def _origin_satisfied(self) -> bool:
         text = normalized_words(self.origin.get("text", ""))
         sentence = normalized_words(self.config["message"])
-        return bool(sentence and f" {sentence} " in f" {text} " and self.origin.get("completed")
+        return bool(sentence and f"{text} ".startswith(f"{sentence} ") and self.origin.get("completed")
                     and self.origin.get("started_at") is not None and not self.origin.get("interrupted"))
 
     def observe(self, event: dict) -> None:

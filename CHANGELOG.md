@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repeat gate closes, retains playback drain and hangup/recovery ownership, and
   bounds missing-start/completion waits. Admin UI and both config APIs share
   validation; announcement waiting stays disabled until explicitly enabled.
+  Originating-turn fast release requires the full normalized sentence at the
+  start of the transcript; a later occurrence waits for the bounded reply path.
   Google Live acceptance verified delayed and originating-turn announcements
   without a repeated announcement or transfer commit; see the
   [revision-pinned validation](docs/baselines/golden/transfer-announcement-743-validation.md).
