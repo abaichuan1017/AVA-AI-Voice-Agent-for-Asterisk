@@ -834,6 +834,7 @@ class GoogleLiveProvider(AIProviderInterface):
             call_id: Unique identifier for the call
             context: Optional context including system prompt, tools, etc.
         """
+        self._handoff_evidence.reset(call_id)
         self._call_id = call_id
         self._closing = False
         self._closed = False
@@ -1709,6 +1710,7 @@ class GoogleLiveProvider(AIProviderInterface):
             self._last_input_transcription_fragment = ""
         if assistant_text:
             self._last_final_assistant_text = assistant_text
+            await self.handoff_transcript(self._call_id, assistant_text, self._audio_response_id if self.long_audio_playback_enabled else None)
             await self._track_conversation_message("assistant", assistant_text)
             self._output_transcription_buffer = ""
             self._last_output_transcription_fragment = ""
@@ -1909,6 +1911,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     text=assistant_final_text[:150],
                 )
+                await self.handoff_transcript(self._call_id, assistant_final_text)
                 await self._track_conversation_message("assistant", assistant_final_text)
                 # Fallback: if the model speaks a clear farewell but doesn't emit a hangup_call toolCall,
                 # arm engine-level hangup after TTS completion.
@@ -2387,6 +2390,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 func_name = func_call.get("name")
                 func_args = func_call.get("args", {})
                 call_id = func_call.get("id")
+                handoff_origin = self._handoff_evidence.turn(owner_call_id, self._audio_response_id if self.long_audio_playback_enabled and self._in_audio_burst else None)["id"]
                 tool_started_at = time.time()
                 tool_result_recorded = False
 
@@ -2525,7 +2529,10 @@ class GoogleLiveProvider(AIProviderInterface):
                         "functionResponses": [func_response]
                     }
                 }
-                if not await self._send_message(tool_response) and not terminal_after_spoken_farewell:
+                await self.prepare_handoff_result(result, owner_call_id, handoff_origin)
+                handoff_send_ok = await self._send_message(tool_response)
+                await self.handoff_result_sent(result, owner_call_id, success=bool(handoff_send_ok))
+                if not handoff_send_ok and not terminal_after_spoken_farewell:
                     logger.warning(
                         "Google Live tool response not sent after session closed",
                         call_id=owner_call_id,
@@ -2960,7 +2967,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     await self.on_event({
                         "type": "AgentAudioDone",
                         "call_id": self._call_id,
-                        "streaming_done": True,
+                        "streaming_done": True, "reason": "stop_session",
                     })
                 except Exception:
                     logger.debug("Failed to emit AgentAudioDone during stop_session",

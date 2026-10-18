@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deferred transfer announcements (#743):** optional global and per-target
+  announcement waiting across all full-agent providers and modular pipelines.
+  One action-scoped coordinator admits the intended response before the #702
+  repeat gate closes, retains playback drain and hangup/recovery ownership, and
+  bounds missing-start/completion waits. Admin UI and both config APIs share
+  validation; existing installations retain current behavior until enabled.
+
 ## [7.6.4] - 2026-10-16
 
 Release scope: merged PRs [#739](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/pull/739),

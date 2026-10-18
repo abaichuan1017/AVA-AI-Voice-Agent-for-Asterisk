@@ -432,6 +432,7 @@ class GrokProvider(AIProviderInterface):
             return None
 
     async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
+        self._handoff_evidence.reset(call_id)
         if not self.config.api_key:
             raise ValueError("Grok Voice Agent provider requires XAI_API_KEY (or per-instance api_key_file)")
 
@@ -828,6 +829,7 @@ class GrokProvider(AIProviderInterface):
             }
             
             # Execute tool via adapter
+            handoff_origin = self._handoff_evidence.turn(self._call_id, event_data.get("response_id") or getattr(self, "_current_response_id", None))["id"]
             result = await self.tool_adapter.handle_tool_call_event(event_data, context)
 
             # Check if this is a hangup_call tool that will trigger hangup
@@ -857,6 +859,9 @@ class GrokProvider(AIProviderInterface):
 
             # Wait for response.done before submitting function_call_output (see
             # _await_parent_response_done for the full rationale).
+            await self.prepare_handoff_result(result, self._call_id, handoff_origin)
+            context["handoff_result_sent"] = self.handoff_result_sent
+
             await self._await_parent_response_done(event_data, function_name=function_name)
 
             # Send result back to Grok
@@ -1474,6 +1479,7 @@ class GrokProvider(AIProviderInterface):
     
     async def _cancel_response(self, response_id: str):
         """Cancel an in-progress response in manual/non-VAD mode."""
+        self.interrupt_handoff(self._call_id)
         if not self.websocket or self.websocket.state.name != "OPEN":
             return
 
@@ -2009,6 +2015,9 @@ class GrokProvider(AIProviderInterface):
             return
 
         if event_type in ("response.completed", "response.error", "response.cancelled", "response.done"):
+            response_status = (event.get("response") or {}).get("status")
+            if event_type in {"response.error", "response.cancelled"} or response_status in {"cancelled", "failed", "incomplete"}:
+                self.interrupt_handoff(self._call_id)
             # Signal any function_call handler waiting on this response. The server
             # commits output items to the conversation on response finalization, so
             # this is the earliest point a function_call_output can be safely submitted.
@@ -2037,7 +2046,10 @@ class GrokProvider(AIProviderInterface):
             # Note: Turn latency timer now starts on input_audio_buffer.speech_stopped
             # (moved from here for standardized measurement across providers)
             
+            handoff_flushed = await self.flush_handoff_pacer()
             await self._emit_audio_done()
+            if had_audio_for_response and handoff_flushed:
+                await self.complete_handoff_audio(self._call_id, current_response_id)
             
             # Only emit additional audio_done if this response actually had audio output
             # This prevents premature hangup when tool responses complete (no audio yet)
@@ -2602,7 +2614,7 @@ class GrokProvider(AIProviderInterface):
                 await self.on_event(
                     {
                         "type": "AgentAudioDone",
-                        "streaming_done": True,
+                        "streaming_done": True, "_handoff_complete": False,
                         "call_id": self._call_id,
                     }
                 )
@@ -2705,6 +2717,7 @@ class GrokProvider(AIProviderInterface):
             complete += part
         if not complete:
             return
+        await self.handoff_transcript(self._call_id, complete, event.get("response_id") or (event.get("response") or {}).get("id") or self._current_response_id)
         await self._track_conversation("assistant", complete)
         await self._emit_transcript(complete, is_final=True)
 
@@ -3190,6 +3203,7 @@ class GrokProvider(AIProviderInterface):
                     if len(self._outbuf) >= chunk_bytes:
                         chunk = bytes(self._outbuf[:chunk_bytes])
                         del self._outbuf[:chunk_bytes]
+                handoff_real_audio = bool(chunk)
                 if not chunk:
                     # Underrun: emit silence to maintain cadence
                     self._pacer_underruns += 1
@@ -3221,7 +3235,7 @@ class GrokProvider(AIProviderInterface):
                 try:
                     await self.on_event(
                         {
-                            "type": "AgentAudio",
+                            "type": "AgentAudio", "_handoff_real_audio": handoff_real_audio,
                             "data": chunk,
                             "streaming_chunk": True,
                             "call_id": call_id,

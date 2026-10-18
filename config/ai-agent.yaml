@@ -940,6 +940,12 @@ tools:
     provider: ${SEND_EMAIL_PROVIDER:-resend}
   transfer:
     defer_until_playback_complete: true
+    # Optional across full-agent providers and modular pipelines (#743).
+    handoff:
+      enabled: false
+      message: ""
+      start_timeout_sec: 4
+      finish_timeout_sec: 20
     deferred_strategy: drain_then_dial
     deferred_audio_drain_timeout_sec: 15
     deferred_audio_drain_quiet_ms: 500

@@ -135,6 +135,9 @@ def sanitize_tool_result_for_json_string(
                     payload[k] = _safe_calendar_events(result[k])
                 else:
                     payload[k] = _safe_jsonable(result.get(k))
+        action = result.get("deferred_transfer")
+        if isinstance(action, dict) and action.get("handoff") and result.get("ai_should_speak") is False:
+            payload["ai_should_speak"] = False
         if "message" not in payload:
             payload["message"] = str(result.get("message") or "")
         # Keep a compact structured payload when available (helps follow-up reasoning).

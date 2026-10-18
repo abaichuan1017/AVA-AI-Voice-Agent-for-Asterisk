@@ -663,6 +663,7 @@ class Engine:
         self._deferred_transfer_commit_locks: Dict[str, asyncio.Lock] = {}
         # Deferred transfer commits in flight, per call: one marker per commit
         # attempt, stamped with the action id it is committing once known.
+        self._transfer_handoffs: Dict[str, Any] = {}
         self._deferred_transfer_committing: Dict[str, List[Dict[str, Any]]] = {}
         # All terminal paths converge on one idempotent drain-and-hangup owner.
         self._terminal_hangup_locks: Dict[str, asyncio.Lock] = {}
@@ -1539,6 +1540,8 @@ class Engine:
         if farewell is not None:
             farewell.set()
         if isinstance(getattr(session, "pending_deferred_transfer", None), dict):
+            if self._handoff_owns_pending(call_id, session):
+                return
             self._fire_and_forget_for_call(
                 call_id, self._commit_pending_deferred_transfer_for_call(
                     call_id, session,
@@ -4153,6 +4156,9 @@ class Engine:
             await provider.close()
         elif hasattr(provider, "stop_session"):
             await provider.stop_session()
+        evidence = getattr(provider, "_handoff_evidence", None)
+        if evidence:
+            evidence.reset(call_id)
         logger.info(
             "AI provider session stopped",
             call_id=call_id,
@@ -10361,6 +10367,9 @@ class Engine:
                 if deferred_recovery and not deferred_recovery.done():
                     deferred_recovery.cancel()
                 self._deferred_transfer_commit_locks.pop(call_id, None)
+                state = getattr(self, "_transfer_handoffs", {}).pop(call_id, None)
+                if state:
+                    state.cancel()
                 self._terminal_hangup_locks.pop(call_id, None)
                 self._terminal_hangup_started.discard(call_id)
                 self._local_tts_farewell_pending.discard(call_id)
@@ -14100,6 +14109,12 @@ class Engine:
             ):
                 return
 
+            # Observe completion before any playback await: close admission before
+            # another provider task can enqueue a repeat while commit wakes up.
+            self._observe_transfer_handoff(call_id, session, event)
+            if etype in {"HandoffPrepared", "HandoffToolResultSent", "HandoffTranscript", "HandoffAudioComplete"}:
+                return
+
             # Normalize provider-native caller activity before any barge-in guards.
             # A speech-start event is useful to the inactivity watchdog even when
             # there is no active agent response to cancel.
@@ -15093,6 +15108,8 @@ class Engine:
                     try:
                         session = await self.session_store.get_by_call_id(call_id)
                         if session and isinstance(getattr(session, "pending_deferred_transfer", None), dict):
+                            if self._handoff_owns_pending(call_id, session):
+                                return
                             # Provider callbacks such as Deepgram's receive loop
                             # are serialized. A timeout recovery may ask that
                             # same provider to speak and wait for its audio
@@ -15147,6 +15164,8 @@ class Engine:
                 try:
                     session = await self.session_store.get_by_call_id(call_id)
                     if session and isinstance(getattr(session, "pending_deferred_transfer", None), dict):
+                        if self._handoff_owns_pending(call_id, session):
+                            return
                         self._fire_and_forget_for_call(
                             call_id,
                             self._commit_pending_deferred_transfer_for_call(
@@ -17709,27 +17728,13 @@ class Engine:
                                             except Exception:
                                                 logger.debug("Failed to record deferred transfer message", call_id=call_id, exc_info=True)
 
-                                            try:
-                                                transfer_bytes = bytearray()
-                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, transfer_message, pipeline.tts_options):
-                                                    if chunk:
-                                                        transfer_bytes.extend(chunk)
-                                                if transfer_bytes:
-                                                    transfer_bytes = self._pipeline_audio_for_file_playback(pipeline.tts_options, bytes(transfer_bytes))
-                                                    transfer_pid = await self.playback_manager.play_audio(
-                                                        call_id,
-                                                        transfer_bytes,
-                                                        "pipeline-transfer",
-                                                    )
-                                                    if transfer_pid:
-                                                        await self.playback_manager.wait_for_playback_end(
-                                                            call_id,
-                                                            transfer_pid,
-                                                            timeout_sec=(len(transfer_bytes) / 8000.0 + 3.0),
-                                                        )
-                                            except Exception:
-                                                logger.error("Deferred transfer TTS failed; committing transfer anyway", call_id=call_id, exc_info=True)
+                                            await self._speak_pipeline_transfer_announcement(call_id, pipeline, transfer_message, deferred_action)
 
+                                        if deferred_action.get("handoff"):
+                                            pending = getattr(session, "pending_deferred_transfer", None)
+                                            if isinstance(pending, dict) and pending.get("id") == deferred_action.get("id"):
+                                                pending["_engine_handoff_attempted"] = True
+                                                await self.session_store.upsert_call(session)
                                         await self._commit_pending_deferred_transfer_for_call(
                                             call_id, session, expected_action_id=deferred_action.get("id"),
                                         )
@@ -18026,22 +18031,12 @@ class Engine:
                                                                     except Exception:
                                                                         logger.debug("Failed to record follow-up deferred transfer message", call_id=call_id, exc_info=True)
 
-                                                                    try:
-                                                                        transfer_bytes = bytearray()
-                                                                        async for chunk in pipeline.tts_adapter.synthesize(call_id, transfer_message, pipeline.tts_options):
-                                                                            if chunk:
-                                                                                transfer_bytes.extend(chunk)
-                                                                        if transfer_bytes:
-                                                                            transfer_bytes = self._pipeline_audio_for_file_playback(pipeline.tts_options, bytes(transfer_bytes))
-                                                                            transfer_pid = await self.playback_manager.play_audio(call_id, transfer_bytes, "pipeline-transfer")
-                                                                            if transfer_pid:
-                                                                                await self.playback_manager.wait_for_playback_end(
-                                                                                    call_id,
-                                                                                    transfer_pid,
-                                                                                    timeout_sec=(len(transfer_bytes) / 8000.0 + 3.0),
-                                                                                )
-                                                                    except Exception:
-                                                                        logger.error("Follow-up deferred transfer TTS failed; committing transfer anyway", call_id=call_id, exc_info=True)
+                                                                    await self._speak_pipeline_transfer_announcement(call_id, pipeline, transfer_message, next_deferred_action)
+                                                                if next_deferred_action.get("handoff"):
+                                                                    pending = getattr(session, "pending_deferred_transfer", None)
+                                                                    if isinstance(pending, dict) and pending.get("id") == next_deferred_action.get("id"):
+                                                                        pending["_engine_handoff_attempted"] = True
+                                                                        await self.session_store.upsert_call(session)
                                                                 await self._commit_pending_deferred_transfer_for_call(
                                                                     call_id, session, expected_action_id=next_deferred_action.get("id"),
                                                                 )
@@ -21826,6 +21821,105 @@ class Engine:
         
         return result
 
+    async def _speak_pipeline_transfer_announcement(self, call_id, pipeline, message, action):
+        from src.core.transfer_handoff import Announcement
+        handoff = action.get("handoff")
+        state = None
+        if handoff:
+            state = Announcement(action["id"], dict(handoff))
+            self._transfer_handoffs[call_id] = state
+
+        async def synthesize():
+            audio = bytearray()
+            async for chunk in pipeline.tts_adapter.synthesize(call_id, message, pipeline.tts_options):
+                if chunk:
+                    audio.extend(chunk)
+            return bytes(audio)
+
+        try:
+            audio = await asyncio.wait_for(synthesize(), handoff["finish_timeout_sec"]) if handoff else await synthesize()
+            if handoff:
+                latest = await self.session_store.get_by_call_id(call_id)
+                pending = getattr(latest, "pending_deferred_transfer", None)
+                if not latest or latest.cleanup_in_progress or not isinstance(pending, dict) or pending.get("id") != action["id"]:
+                    state.cancel()
+                    return False
+            if audio:
+                audio = self._pipeline_audio_for_file_playback(pipeline.tts_options, audio)
+                playback_id = await self.playback_manager.play_audio(call_id, audio, "pipeline-transfer")
+                if playback_id:
+                    timeout = handoff["finish_timeout_sec"] if handoff else len(audio) / 8000.0 + 3.0
+                    played = await self.playback_manager.wait_for_playback_end(call_id, playback_id, timeout_sec=timeout)
+                    if state:
+                        state.seal("pipeline_announcement_completed" if played else "pipeline_playback_timeout")
+                    return bool(played)
+            if state:
+                state.seal("pipeline_no_audio")
+            return False
+        except asyncio.CancelledError:
+            if state:
+                state.cancel()
+            raise
+        except Exception:
+            if state:
+                state.seal("pipeline_tts_failed")
+            logger.error("Deferred transfer TTS failed; using existing transfer drain", call_id=call_id, exc_info=True)
+            return False
+
+    def _handoff_owns_pending(self, call_id, session):
+        action = getattr(session, "pending_deferred_transfer", None)
+        return bool(isinstance(action, dict) and action.get("handoff"))
+
+    def _observe_transfer_handoff(self, call_id, session, event):
+        from src.core.transfer_handoff import Announcement
+        action = getattr(session, "pending_deferred_transfer", None)
+        states = getattr(self, "_transfer_handoffs", None)
+        if states is None:
+            states = self._transfer_handoffs = {}
+        state = states.get(call_id)
+        if state and (not isinstance(action, dict) or action.get("id") != state.action_id):
+            state.cancel()
+            states.pop(call_id, None)
+            state = None
+        if not isinstance(action, dict) or not action.get("handoff"):
+            return
+        if event.get("type") == "HandoffPrepared" and event.get("action_id") == action.get("id"):
+            if state is None:
+                origin = event.get("origin") or {}
+                state = Announcement(action["id"], dict(action["handoff"]), origin.get("id"), dict(origin))
+                states[call_id] = state
+                if action["handoff"].get("owner") == "engine":
+                    state.seal("engine_announcement")
+                self._fire_and_forget_for_call(
+                    call_id, self._commit_pending_deferred_transfer_for_call(
+                        call_id, session, expected_action_id=action["id"],
+                    ), name=f"transfer-announcement-{call_id}",
+                )
+        if state is None:
+            return
+        event_action = event.get("action_id") or event.get("handoff_action_id")
+        if event_action != state.action_id:
+            return
+        state.expire()
+        state.observe(event)
+
+    async def _await_transfer_handoff(self, call_id, action_id):
+        async def still_owned():
+            latest = await self.session_store.get_by_call_id(call_id)
+            pending = getattr(latest, "pending_deferred_transfer", None)
+            return bool(latest and not latest.cleanup_in_progress and not latest.cleanup_completed
+                        and isinstance(pending, dict) and pending.get("id") == action_id)
+        state = getattr(self, "_transfer_handoffs", {}).get(call_id)
+        if state is None or state.action_id != action_id:
+            # A configured provider action cannot commit on its tool-call turn
+            # before the adapter has prepared and sent its function result.
+            return False
+        ready = await state.wait(still_owned)
+        if ready:
+            logger.info("Transfer announcement readiness", call_id=call_id,
+                        action_id=action_id, reason=state.reason)
+        return ready
+
     def _provider_audio_blocked_by_transfer_commit(
         self,
         call_id: str,
@@ -21846,6 +21940,11 @@ class Engine:
         action_id = pending.get("id")
         if action_id is None:
             return False
+        state = getattr(self, "_transfer_handoffs", {}).get(call_id)
+        if state and state.action_id == action_id:
+            state.expire()
+            if state.sealed and not state.cancelled:
+                return True
         markers = (getattr(self, "_deferred_transfer_committing", None) or {}).get(call_id) or ()
         return any(marker.get("action_id") == action_id for marker in markers)
 
@@ -21886,6 +21985,10 @@ class Engine:
                 markers.remove(marker)
             if not markers:
                 committing.pop(call_id, None)
+            state = getattr(self, "_transfer_handoffs", {}).get(call_id)
+            if state and state.action_id == expected_action_id:
+                state.cancel()
+                self._transfer_handoffs.pop(call_id, None)
 
     async def _commit_pending_deferred_transfer_for_call_inner(
         self,
@@ -21926,7 +22029,9 @@ class Engine:
                     latest_action_id=action_id,
                 )
                 return None
-            if commit_marker is not None:
+            # Preserve #702's original pre-await gate for every legacy action.
+            # Only opted-in provider announcements keep admission open here.
+            if commit_marker is not None and (not action.get("handoff") or action.get("_engine_handoff_attempted")):
                 commit_marker["action_id"] = action_id
 
             # Transfer owns the call now. Retire both engine and provider hangup
@@ -21949,6 +22054,17 @@ class Engine:
                         call_id=call_id,
                         exc_info=True,
                     )
+
+            if action.get("handoff"):
+                if not await self._await_transfer_handoff(call_id, action_id):
+                    return None
+                # Ownership may have changed while a waiter was waking.
+                session = await self.session_store.get_by_call_id(call_id)
+                pending = getattr(session, "pending_deferred_transfer", None)
+                if not isinstance(pending, dict) or pending.get("id") != action_id:
+                    return None
+            if commit_marker is not None:
+                commit_marker["action_id"] = action_id
 
             local_handoff_played = await self._play_deferred_transfer_local_handoff(call_id, session)
             if not local_handoff_played:
@@ -22556,6 +22672,11 @@ class Engine:
         except Exception:
             message = f"Transferring you to {description} now."
 
+        if action.get("_engine_handoff_attempted"):
+            return False
+        if action.get("handoff"):
+            message = action["handoff"]["message"]
+
         try:
             timeout_sec = float(transfer_cfg.get("local_handoff_audio_tts_timeout_sec", 3.0) or 3.0)
         except (TypeError, ValueError):
@@ -22583,6 +22704,12 @@ class Engine:
             )
             return False
 
+        if action.get("handoff"):
+            latest = await self.session_store.get_by_call_id(call_id)
+            pending = getattr(latest, "pending_deferred_transfer", None)
+            if not latest or latest.cleanup_in_progress or not isinstance(pending, dict) or pending.get("id") != action.get("id"):
+                return False
+
         playback_id = await self.playback_manager.play_audio(call_id, audio, "transfer-handoff")
         if not playback_id:
             logger.warning(
@@ -22593,11 +22720,22 @@ class Engine:
             return False
 
         wait_timeout = min(10.0, max(1.0, (len(audio) / 8000.0) + 1.0))
-        played = await self.playback_manager.wait_for_playback_end(
-            call_id,
-            playback_id,
-            timeout_sec=wait_timeout,
-        )
+        playback_wait = asyncio.create_task(self.playback_manager.wait_for_playback_end(
+            call_id, playback_id, timeout_sec=wait_timeout,
+        ))
+        try:
+            while action.get("handoff") and not playback_wait.done():
+                latest = await self.session_store.get_by_call_id(call_id)
+                pending = getattr(latest, "pending_deferred_transfer", None)
+                if not latest or latest.cleanup_in_progress or not isinstance(pending, dict) or pending.get("id") != action.get("id"):
+                    await self.ari_client.stop_playback(playback_id)
+                    return False
+                await asyncio.wait({playback_wait}, timeout=0.1)
+            played = await playback_wait
+        finally:
+            if not playback_wait.done():
+                playback_wait.cancel()
+                await asyncio.gather(playback_wait, return_exceptions=True)
         logger.info(
             "Deferred transfer local handoff playback completed",
             call_id=call_id,

@@ -754,6 +754,7 @@ class DeepgramProvider(AIProviderInterface):
 
     async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
         # Use configurable voice agent endpoint when available; fall back to default.
+        self._handoff_evidence.reset(call_id)
         base_url = getattr(self.config, "voice_agent_base_url", None) or "wss://agent.deepgram.com/v1/agent/converse"
         ws_url = base_url
         headers = {'Authorization': f'Token {self.config.api_key}'}
@@ -1401,6 +1402,7 @@ class DeepgramProvider(AIProviderInterface):
             }
             
             # Execute tool via adapter
+            handoff_origin = self._handoff_evidence.turn(self.call_id, getattr(self, "_current_response_id", None))["id"]
             result = await self.tool_adapter.handle_tool_call_event(event_data, context)
             
             # Check if this was a hangup request
@@ -1432,6 +1434,9 @@ class DeepgramProvider(AIProviderInterface):
             tool_result_recorded = True
             
             # Send result back to Deepgram
+            await self.prepare_handoff_result(result, self.call_id, handoff_origin)
+            context["handoff_result_sent"] = self.handoff_result_sent
+
             await self.tool_adapter.send_tool_result(result, context)
         except asyncio.CancelledError:
             if not tool_result_recorded:

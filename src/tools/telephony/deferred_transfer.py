@@ -55,6 +55,28 @@ async def store_pending_deferred_transfer(
     action: Dict[str, Any],
 ) -> None:
     session = await context.get_session()
+    from src.tools.handoff_config import resolve_handoff
+    from src.config.provider_instances import provider_kind
+    transfer = context.get_config_value("tools.transfer") or {}
+    destination = (transfer.get("destinations") or {}).get(action.get("destination_key")) or {}
+    if action.get("source_tool") == "live_agent_transfer":
+        destination = (context.get_config_value("tools.extensions.internal") or {}).get(action.get("target")) or destination
+    handoff = resolve_handoff(transfer, destination)
+    if handoff:
+        payload = action.get("payload") or {}
+        if payload.get("screening_mode") == "caller_recording":
+            prompt = str(payload.get("caller_screening_prompt") or "").strip()
+            if prompt:
+                handoff["message"] = f"{handoff['message']} {prompt}"
+        key = getattr(context, "provider_name", None) or ""
+        kind = provider_kind(key, (context.get_config_value("providers") or {}).get(key) or {}) or key
+        local = transfer.get("local_handoff_audio_providers", ["deepgram"])
+        if local is True:
+            local = ["deepgram"]
+        if isinstance(local, str):
+            local = [part.strip() for part in local.split(",")]
+        handoff["owner"] = "engine" if local and kind in local and not session.pipeline_name else "provider"
+        action["handoff"] = handoff
     session.pending_deferred_transfer = dict(action)
     await context.session_store.upsert_call(session)
     logger.info(
@@ -76,6 +98,9 @@ def build_deferred_transfer_result(
     status: str = "success",
     extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    handoff = action.get("handoff") or {}
+    if handoff:
+        message = handoff["message"]
     result = {
         "status": status,
         "message": message,
@@ -88,6 +113,9 @@ def build_deferred_transfer_result(
             if not str(key).startswith("_")
         },
     }
+    if handoff.get("owner") == "engine":
+        result["message"] = "The transfer announcement is played by the engine. Do not speak again."
+        result["ai_should_speak"] = False
     if extra:
         result.update(extra)
     return result

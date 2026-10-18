@@ -489,6 +489,8 @@ class ToolRuntimeGeneration:
         from src.tools.registry import ToolRegistry
 
         snapshot = copy.deepcopy(dict(config or {}))
+        from src.tools.handoff_config import validate_handoff_config
+        validate_handoff_config(snapshot.get("tools") or {})
         registry = ToolRegistry.isolated()
         registry.initialize_default_tools()
         registry.initialize_http_tools_from_config(snapshot.get("tools") or {})

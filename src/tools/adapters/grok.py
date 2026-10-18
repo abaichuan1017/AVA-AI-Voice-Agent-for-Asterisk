@@ -229,6 +229,9 @@ class GrokToolAdapter:
                 },
             }
             await websocket.send(json.dumps(output_event))
+            notify = context.get("handoff_result_sent")
+            if notify:
+                await notify(result, context.get("call_id"), success=True)
             logger.info(
                 f"✅ Sent function output to Grok: {safe_result.get('status')}",
                 call_id=context.get("call_id"),
@@ -270,4 +273,7 @@ class GrokToolAdapter:
             logger.info("✅ Triggered Grok response generation (audio+text)")
 
         except Exception as e:
+            notify = context.get("handoff_result_sent")
+            if notify:
+                await notify(result, context.get("call_id"), success=False)
             logger.error(f"Failed to send tool result to Grok: {e}", exc_info=True)
