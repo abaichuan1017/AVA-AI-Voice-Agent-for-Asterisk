@@ -627,12 +627,13 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                         const result = res.data?.result || {};
                         const calendars: MsCalendarSummary[] = result.calendars || [];
                         const defaultCal = calendars.find((c) => c.is_default_calendar) || calendars[0];
+                        const latestAccount = latestConfigRef.current?.microsoft_calendar?.accounts?.default || {};
                         setMsCalendars(calendars);
                         updateMicrosoftAccount({
                             token_cache_path: result.token_cache_path || '',
                             user_principal_name: result.user_principal_name || '',
-                            calendar_id: defaultCal?.id || microsoftAccount.calendar_id || '',
-                            timezone: microsoftAccount.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+                            calendar_id: defaultCal?.id || latestAccount.calendar_id || '',
+                            timezone: latestAccount.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
                         });
                         setMsDevice((prev) => ({ ...prev, status: 'success' }));
                         toast.success('Microsoft Calendar connected');

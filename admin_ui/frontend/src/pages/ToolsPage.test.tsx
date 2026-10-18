@@ -175,7 +175,10 @@ describe('Tools list and dedicated editors', () => {
         expect((postedConfig().tools.check_extension_status as unknown as { state_mapping: { free: string[] } }).state_mapping.free).toEqual(['NOT_INUSE', 'CUSTOM_READY']);
     });
 
-    it('keeps a pending Microsoft connection alive across navigation without overwriting other tool edits', async () => {
+    it.each([
+        { scenario: 'discovered calendar', calendars: [{ id: 'calendar', name: 'Appointments', is_default_calendar: true }], expectedCalendar: 'calendar' },
+        { scenario: 'no discovered calendar', calendars: [], expectedCalendar: 'operator-calendar' },
+    ])('keeps pending Microsoft draft edits across navigation with $scenario', async ({ calendars, expectedCalendar }) => {
         const config = fixture();
         config.tools.microsoft_calendar.accounts = { default: { tenant_id: 'tenant', client_id: 'client', timezone: 'UTC' } };
         mocks.load.mockResolvedValue({ config, yamlError: null });
@@ -189,17 +192,22 @@ describe('Tools list and dedicated editors', () => {
         await open('Microsoft Calendar');
         fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
         await screen.findByText('Authorize Microsoft Calendar');
+        fireEvent.change(screen.getByLabelText('Timezone'), { target: { value: 'Pacific/Auckland' } });
+        fireEvent.change(screen.getByLabelText('Calendar ID'), { target: { value: 'operator-calendar' } });
         fireEvent.click(screen.getByRole('button', { name: 'Back to tools' }));
         await editFarewell();
-        await act(async () => finish({ data: { status: 'success', result: { token_cache_path: '/app/project/secrets/test-cache.json', user_principal_name: 'test@example.com', calendars: [{ id: 'calendar', name: 'Appointments', is_default_calendar: true }] } } }));
+        await act(async () => finish({ data: { status: 'success', result: { token_cache_path: '/app/project/secrets/test-cache.json', user_principal_name: 'test@example.com', calendars } } }));
         expect(screen.getByLabelText('Default Farewell Message')).toHaveValue('See you soon.');
         fireEvent.click(screen.getByRole('button', { name: 'Back to tools' }));
         await open('Microsoft Calendar');
         expect(screen.getByLabelText('Signed-in user')).toHaveValue('test@example.com');
+        expect(screen.getByLabelText('Timezone')).toHaveValue('Pacific/Auckland');
+        expect(screen.getByLabelText('Calendar ID')).toHaveValue(expectedCalendar);
         expect(vi.mocked(axios.post).mock.calls.filter(([url]) => url.toString().endsWith('/device/start'))).toHaveLength(1);
         fireEvent.click(screen.getByRole('button', { name: 'Save & Apply' }));
         await screen.findByText(/Applied as tool generation 9/);
         expect(postedConfig().tools.hangup_call.farewell_message).toBe('See you soon.');
+        expect(postedConfig().tools.microsoft_calendar.accounts).toMatchObject({ default: { timezone: 'Pacific/Auckland', calendar_id: expectedCalendar } });
     });
 
     it('merges Google verification autofill into the latest draft after changing editors', async () => {

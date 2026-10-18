@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Tools save/apply and navigation:** preserve drafts and calendar connection
   state while moving between editors; merge background calendar results into the
-  latest draft. Keep blur-committed fields in saves, block editing after a failed
+  latest draft, including Microsoft timezone/calendar fallback values edited
+  during sign-in. Keep blur-committed fields in saves, block editing after a failed
   configuration load, and distinguish failed/partial reloads from full application.
 
 - **Deferred transfer announcements (#743):** optional global and per-target
