@@ -45,6 +45,7 @@ class PlaybackRef:
     media_uri: str
     audio_file: str
     timestamp: float = field(default_factory=time.time)
+    cancel_cleanup_pending: bool = False
 
 
 @dataclass

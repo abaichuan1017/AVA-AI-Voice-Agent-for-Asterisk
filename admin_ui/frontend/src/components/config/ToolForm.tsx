@@ -1,3 +1,4 @@
+import TransferHandoffFields from './TransferHandoffFields';
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -1336,6 +1337,10 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
 
     const handleSaveDestination = () => {
         if (!destinationForm.key) return;
+        if (destinationForm.handoff?.mode === 'custom' && !destinationForm.handoff.message?.trim()) {
+            toast.error('Enter a custom transfer announcement before saving.');
+            return;
+        }
 
         const destinations = { ...(config.transfer?.destinations || {}) };
 
@@ -1423,6 +1428,11 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                                         checked={config.transfer?.defer_until_playback_complete ?? true}
                                         onChange={(e) => updateNestedConfig('transfer', 'defer_until_playback_complete', e.target.checked)}
                                         className="mb-0 border border-border rounded-lg p-3 bg-background/50"
+                                    />
+                                    <TransferHandoffFields
+                                        value={config.transfer?.handoff}
+                                        disabled={config.transfer?.defer_until_playback_complete === false}
+                                        onChange={value => updateNestedConfig('transfer', 'handoff', value)}
                                     />
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                         <FormSelect
@@ -2237,6 +2247,14 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
 
                                     return (
 	                            <div key={rowId} className="flex flex-col gap-4 p-5 border border-border/60 rounded-lg bg-card/40 hover:bg-card/60 transition-colors shadow-sm">
+
+                                <TransferHandoffFields override value={ext.handoff} global={config.transfer?.handoff}
+                                    disabled={config.transfer?.defer_until_playback_complete === false}
+                                    onChange={value => {
+                                        const updated = { ...(config.extensions?.internal || {}) };
+                                        updated[key] = { ...ext, handoff: value };
+                                        updateNestedConfig('extensions', 'internal', updated);
+                                    }} />
 
                                 {/* Core Info Row */}
                                 <div className="flex flex-col xl:flex-row gap-4 xl:items-end items-start w-full">
@@ -3780,6 +3798,9 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                 }
             >
                 <div className="space-y-4">
+                    <TransferHandoffFields override value={destinationForm.handoff} global={config.transfer?.handoff}
+                        disabled={config.transfer?.defer_until_playback_complete === false}
+                        onChange={value => setDestinationForm({ ...destinationForm, handoff: value })} />
                     <FormInput
                         label="Key (Name)"
                         value={destinationForm.key || ''}

@@ -242,12 +242,21 @@ class DeepgramToolAdapter:
             "content": json.dumps(safe_result)  # Stringify JSON (size-capped)
         }
         
+        output_sent = False
         try:
             await websocket.send(json.dumps(response))
+            output_sent = True
+            notify = context.get("handoff_result_sent")
+            if notify:
+                await notify(result, context.get("call_id"), success=True)
             logger.info(
                 f"✅ Sent tool result to Deepgram: {safe_result.get('status')}",
                 call_id=context.get("call_id"),
                 function_call_id=function_call_id,
             )
         except Exception as e:
-            logger.error(f"Failed to send tool result to Deepgram: {e}", exc_info=True)
+            notify = context.get("handoff_result_sent")
+            if notify and not output_sent:
+                await notify(result, context.get("call_id"), success=False)
+            failure = "Delivered tool result follow-up failed" if output_sent else "Tool result send failed"
+            logger.error(f"{failure} (Deepgram): {e}", exc_info=True)

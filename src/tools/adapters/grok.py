@@ -178,6 +178,10 @@ class GrokToolAdapter:
                 tool=function_name,
                 result_keys=sorted(sanitized),
             )
+            # Runtime ownership stays in-process; send_tool_result sanitizes
+            # the provider-visible payload independently at the wire boundary.
+            if isinstance(raw_result, dict) and isinstance(raw_result.get("deferred_transfer"), dict):
+                sanitized["deferred_transfer"] = raw_result["deferred_transfer"]
             sanitized['call_id'] = function_call_id
             sanitized['function_name'] = function_name
             return sanitized
@@ -214,6 +218,7 @@ class GrokToolAdapter:
             logger.error("No call_id in result, cannot send response")
             return
 
+        output_sent = False
         try:
             safe_result = sanitize_tool_result_for_json_string(
                 result,
@@ -229,6 +234,10 @@ class GrokToolAdapter:
                 },
             }
             await websocket.send(json.dumps(output_event))
+            output_sent = True
+            notify = context.get("handoff_result_sent")
+            if notify:
+                await notify(result, context.get("call_id"), success=True)
             logger.info(
                 f"✅ Sent function output to Grok: {safe_result.get('status')}",
                 call_id=context.get("call_id"),
@@ -270,4 +279,8 @@ class GrokToolAdapter:
             logger.info("✅ Triggered Grok response generation (audio+text)")
 
         except Exception as e:
-            logger.error(f"Failed to send tool result to Grok: {e}", exc_info=True)
+            notify = context.get("handoff_result_sent")
+            if notify and not output_sent:
+                await notify(result, context.get("call_id"), success=False)
+            failure = "Delivered tool result follow-up failed" if output_sent else "Tool result send failed"
+            logger.error(f"{failure} (Grok): {e}", exc_info=True)

@@ -21,6 +21,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = structlog.get_logger(__name__)
 
+_CANCEL_STOP_ATTEMPTS = 5
+_CANCEL_RETRY_DELAY = 0.1
+
 
 class PlaybackManager:
     """
@@ -114,6 +117,9 @@ class PlaybackManager:
         Returns:
             playback_id if successful, None if failed
         """
+        playback_id = None
+        audio_file = None
+        ari_attempted = False
         try:
             # Get session to determine target channel
             session = await self.session_store.get_by_call_id(call_id)
@@ -163,6 +169,7 @@ class PlaybackManager:
             await self.session_store.add_playback(playback_ref)
             
             # Play audio via ARI
+            ari_attempted = True
             success = await self._play_via_ari(session, audio_file, playback_id)
             if not success:
                 # Cleanup if playback failed to start
@@ -186,6 +193,31 @@ class PlaybackManager:
             
             return playback_id
             
+        except asyncio.CancelledError:
+            # A timed-out POST may already have started playback remotely.
+            # Only release its ref/token after a confirmed stop; otherwise the
+            # engine's existing drain/recovery retains ownership of that output.
+            stopped = not ari_attempted
+            if ari_attempted and playback_id:
+                await self.retain_cancelled_playback(call_id, playback_id)
+                try:
+                    stopped = bool(await asyncio.wait_for(self.ari_client.stop_playback(playback_id), 1.0))
+                except Exception:
+                    stopped = False
+            if stopped and playback_id:
+                await self.session_store.pop_playback(playback_id)
+                if self.conversation_coordinator:
+                    await self.conversation_coordinator.cancel_tts(call_id, playback_id)
+                    latest = await self.session_store.get_by_call_id(call_id)
+                    if latest and not latest.tts_tokens:
+                        await self.conversation_coordinator.update_conversation_state(call_id, "listening")
+                else:
+                    await self.session_store.clear_gating_token(call_id, playback_id)
+                if audio_file:
+                    await self._cleanup_audio_file(audio_file)
+            elif playback_id:
+                logger.warning("Cancelled playback startup stop unconfirmed; retaining output ownership", call_id=call_id, playback_id=playback_id)
+            raise
         except Exception as e:
             logger.error("Error playing audio",
                         call_id=call_id,
@@ -194,6 +226,79 @@ class PlaybackManager:
                         exc_info=True)
             return None
     
+    async def retain_cancelled_playback(self, call_id: str, playback_id: str) -> None:
+        """Keep an exact-playback retry owner across transfer cancellation/replacement."""
+        ref = await self.session_store.get_playback(playback_id)
+        if not ref or ref.call_id != call_id or ref.cancel_cleanup_pending:
+            return
+        ref.cancel_cleanup_pending = True
+
+        async def retry_stop():
+            delay = _CANCEL_RETRY_DELAY
+            for _attempt in range(_CANCEL_STOP_ATTEMPTS):
+                await asyncio.sleep(delay)
+                current = await self.session_store.get_playback(playback_id)
+                session = await self.session_store.get_by_call_id(call_id)
+                if not current or current.call_id != call_id:
+                    return
+                if not session:
+                    await self.discard_terminal_playbacks(call_id)
+                    return
+                if session.cleanup_in_progress or session.cleanup_completed:
+                    return
+                try:
+                    stopped = bool(await asyncio.wait_for(self.ari_client.stop_playback(playback_id), 1.0))
+                except Exception:
+                    stopped = False
+                if stopped:
+                    await self.on_playback_finished(playback_id)
+                    return
+                delay = min(delay * 2, 5.0)
+            session = await self.session_store.get_by_call_id(call_id)
+            if not session or session.cleanup_in_progress or session.cleanup_completed:
+                return
+            # Retry exhaustion is a terminal call failure, not evidence that
+            # the remote playback completed. Close the AI context fail-closed
+            # and use the engine's existing telephony-ownership cleanup rules.
+            session.call_outcome = "failed"
+            session.cleanup_in_progress = True
+            session.audio_capture_enabled = False
+            await self.session_store.upsert_call(session)
+            logger.error("Cancelled playback stop retries exhausted; closing AI call", call_id=call_id, playback_id=playback_id)
+            engine = getattr(self.ari_client, "engine", None)
+            cleanup = getattr(engine, "_cleanup_call", None)
+            try:
+                if callable(cleanup):
+                    await cleanup(call_id)
+                else:
+                    logger.critical("Engine lifecycle unavailable during terminal playback recovery", call_id=call_id)
+                    await self.discard_terminal_playbacks(call_id)
+                    await self.session_store.remove_call(call_id)
+            finally:
+                await self.discard_terminal_playbacks(call_id)
+
+        engine = getattr(self.ari_client, "engine", None)
+        schedule = getattr(engine, "_fire_and_forget_for_call", None)
+        if callable(schedule):
+            schedule(call_id, retry_stop(), name=f"cancelled-playback-{playback_id}")
+        else:
+            asyncio.create_task(retry_stop(), name=f"cancelled-playback-{playback_id}")
+
+    async def discard_terminal_playbacks(self, call_id: str) -> None:
+        """Release local resources as a call closes, without claiming remote completion."""
+        for playback_id in await self.session_store.list_playbacks_for_call(call_id):
+            ref = await self.session_store.pop_playback(playback_id)
+            if ref is None:
+                continue
+            if self.conversation_coordinator:
+                await self.conversation_coordinator.cancel_tts(call_id, playback_id)
+            else:
+                await self.session_store.clear_gating_token(call_id, playback_id)
+            await self._cleanup_audio_file(ref.audio_file)
+        session = await self.session_store.get_by_call_id(call_id)
+        if session:
+            session.audio_capture_enabled = False
+
     async def on_playback_finished(self, playback_id: str) -> bool:
         """
         Handle PlaybackFinished event from Asterisk.
@@ -303,7 +408,18 @@ class PlaybackManager:
                 with open(file_path, 'wb') as f:
                     f.write(audio_bytes)
 
-            await asyncio.to_thread(_write)
+            write_task = asyncio.create_task(asyncio.to_thread(_write))
+            try:
+                await asyncio.shield(write_task)
+            except asyncio.CancelledError:
+                # The worker can finish after cancellation. Remove its file
+                # only after the write completes so it cannot recreate a leak.
+                def cleanup_after_write(done):
+                    if not done.cancelled():
+                        done.exception()
+                    asyncio.create_task(self._cleanup_audio_file(file_path))
+                write_task.add_done_callback(cleanup_after_write)
+                raise
             
             # Set file permissions for Asterisk readability via group
             # Files inherit group ownership from setgid directory (set up by preflight.sh)
@@ -459,6 +575,10 @@ class PlaybackManager:
             # Check if playback is still active
             playback_ref = await self.session_store.get_playback(playback_id)
             if playback_ref:
+                if playback_ref.cancel_cleanup_pending:
+                    # Timing is not evidence that an uncertain remote stop
+                    # succeeded. Its exact-playback retry owner clears it.
+                    return
                 # PlaybackFinished may have been missed. Clean up gating and local playback tracking
                 # so we don't leak playbacks/gating for long-running calls.
                 popped_ref = None

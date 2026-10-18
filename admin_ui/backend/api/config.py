@@ -939,6 +939,12 @@ def _validate_ai_agent_config(content: str) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    try:
+        from src.tools.handoff_config import validate_handoff_config
+        validate_handoff_config(parsed.get("tools") or {})
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     # Warn if user put credentials in YAML (they will be ignored by design).
     try:
         asterisk_block = parsed.get("asterisk") if isinstance(parsed.get("asterisk"), dict) else {}

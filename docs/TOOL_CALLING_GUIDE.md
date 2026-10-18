@@ -1241,6 +1241,103 @@ does not depend on `farewell_hangup_delay_sec` and is not a guarantee that every
 model response will be recognized as a closing.
 
 
+### Optional transfer announcement waiting (#743)
+
+Under **Tools → Transfer**, enable **Wait for transfer announcement** and enter
+an announcement. Destinations and Live Agents can inherit that sentence, disable
+waiting, or use a custom sentence. The setting supports Google Live, OpenAI
+Realtime, Grok, Deepgram Voice Agent, ElevenLabs Agent, Local, and modular pipelines.
+It requires deferred transfer; it does not change destination access policies.
+
+```yaml
+tools:
+  transfer:
+    defer_until_playback_complete: true
+    handoff:
+      enabled: true
+      message: "We are closed. Please leave a message."
+      start_timeout_sec: 4
+      finish_timeout_sec: 20
+    destinations:
+      reception:
+        type: extension
+        target: "6000"
+        handoff:
+          mode: custom  # inherit (default), disabled, or custom
+          message: "I will connect you to reception now."
+```
+
+Live Agent overrides use the same `handoff` block under
+`tools.extensions.internal.<extension>`. A custom override can enable the
+announcement for that target while the global announcement is disabled.
+**Save & Apply** affects new calls; active calls retain their configuration snapshot.
+Disabling the setting restores the existing #702 suppression and drain behavior.
+
+For provider-generated speech, the engine waits before activating the #702
+commit gate. A completed, uninterrupted originating response starting with the full
+normalized sentence (on a word boundary) releases immediately. Otherwise the engine waits for a
+response whose audio starts after the tool result was successfully sent. It has
+4 seconds to start and 20 seconds from its first audio to finish by default.
+The respective configurable limits are 10 and 60 seconds. Provider idle timers,
+partial audio segments, and interrupted responses do not establish completion.
+ElevenLabs deployments should enable authoritative `agent_response_complete`
+events; without one the bounded timeout remains available.
+
+Speech ownership and playback selection use the same normalization of
+`local_handoff_audio_providers`, preserving case-insensitive provider names,
+comma-separated strings, lists and legacy boolean handling. This prevents
+configuration spellings from assigning both a provider and local speech owner.
+Deepgram's configured local handoff and modular pipeline handoffs have one TTS
+owner and use the resolved announcement directly. Pipeline synthesis, playback
+startup and completion share the finish budget; configured engine-owned local
+playback startup is also bounded. If startup is cancelled, its exact playback
+reference and capture gate are cleared after a confirmed stop. An uncertain stop
+retains an exact-playback retry owner across transfer cancellation/replacement.
+Each stop request is bounded to one second; after five retry attempts, the AI
+call enters the existing terminal cleanup lifecycle. Local refs, files and gates
+are retired as the call closes, without claiming that an unconfirmed remote
+playback finished. Elapsed gating timers cannot release uncertain output. An attended caller-recording
+transfer retains its name/reason instruction after the configured sentence.
+
+After readiness or timeout, later provider responses are suppressed and the
+existing caller-facing audio drain runs before transfer. Drain failure still
+cancels the transfer and recovers to the AI. These waits are cumulative: the
+announcement deadline does not replace the configured audio-drain deadline.
+
+This is best-effort speech delivery, not proof that a required sentence was
+heard. Translations cannot match the originating sentence, and completion of a
+later response does not verify its wording. On timeout the engine continues the
+existing transfer process. Runtime logs record action ID and readiness reason
+without adding announcement text. In-memory waiting state is discarded on call
+cleanup/restart; cancelled actions are never recreated from timing evidence.
+If an adapter's preparation event is missing, the engine waits up to the start
+window for it, then cancels the exact action and returns the caller to the AI;
+this internal failure does not silently leave a transfer pending.
+
+
+#### Prompt guidance and verification
+
+Keep the announcement in Tools configuration rather than duplicating its wording
+in a normal Agent prompt. After a successful deferred-transfer tool result, the
+Agent should follow the returned speech instructions, say the configured sentence
+once, and avoid follow-up speech while the transfer is pending. Respect
+`ai_should_speak=false` for engine-owned audio. Availability checks and Agent
+resource restrictions still apply. Restoring a pre-test Agent prompt does not
+reset the separately saved Tools announcement.
+
+Verify both a filler/tool turn followed by the announcement in a later response
+and an announcement contained in the originating response. In the runtime logs,
+expect `Transfer announcement readiness` with `reply_completed` and
+`origin_sentence_matched`, respectively, followed by caller-facing audio drain
+and one successful transfer commit. These reasons describe event evidence; a
+later response's wording is not verified by the coordinator. Also cover
+cancellation, missing audio/completion deadlines, destination failure, cleanup,
+and announcement-disabled behavior when qualifying a deployment.
+
+The [#743 validation record](baselines/golden/transfer-announcement-743-validation.md)
+separates Google Live call evidence from automated coverage for other providers
+and pipelines. A successful provider readiness check is not a live transfer test.
+
 ### Enable Tools per Context / Pipeline (Allowlisting)
 
 Tools are allowlisted per **context** (and optionally per **pipeline**).

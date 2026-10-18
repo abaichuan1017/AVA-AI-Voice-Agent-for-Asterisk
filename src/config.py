@@ -1403,6 +1403,12 @@ class AppConfig(BaseModel):
         return data
 
     @model_validator(mode="after")
+    def _validate_transfer_handoff(self) -> "AppConfig":
+        from src.tools.handoff_config import validate_handoff_config
+        validate_handoff_config(self.tools)
+        return self
+
+    @model_validator(mode="after")
     def _validate_audio_profile_contracts(self) -> "AppConfig":
         """Reject invalid audio-policy and Asterisk profile contracts."""
         allowed_resamplers = {"linear", "bandlimited"}
