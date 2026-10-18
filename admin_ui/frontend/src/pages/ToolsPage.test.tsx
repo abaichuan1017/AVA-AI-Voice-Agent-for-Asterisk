@@ -7,6 +7,11 @@ import axios from 'axios';
 import yaml from 'js-yaml';
 import ToolsPage from './ToolsPage';
 
+// These integration tests intentionally mount every real tool form to verify
+// draft/OAuth preservation across navigation. Accessibility queries over that
+// DOM take longer on shared CI runners than the default five-second budget.
+vi.setConfig({ testTimeout: 30000 });
+
 const mocks = vi.hoisted(() => ({
     load: vi.fn(), confirm: vi.fn(), refetch: vi.fn(),
     state: { restartRequired: false, applyRequired: false, recommendedApplyMethod: 'none', stateStale: false },
