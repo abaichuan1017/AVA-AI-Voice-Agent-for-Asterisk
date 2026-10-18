@@ -178,6 +178,10 @@ class GrokToolAdapter:
                 tool=function_name,
                 result_keys=sorted(sanitized),
             )
+            # Runtime ownership stays in-process; send_tool_result sanitizes
+            # the provider-visible payload independently at the wire boundary.
+            if isinstance(raw_result, dict) and isinstance(raw_result.get("deferred_transfer"), dict):
+                sanitized["deferred_transfer"] = raw_result["deferred_transfer"]
             sanitized['call_id'] = function_call_id
             sanitized['function_name'] = function_name
             return sanitized

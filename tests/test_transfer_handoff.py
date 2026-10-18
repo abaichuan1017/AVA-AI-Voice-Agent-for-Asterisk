@@ -535,3 +535,101 @@ async def test_provider_stop_discards_only_its_completed_call_evidence(provider_
         assert close_fails
     assert "ended" not in provider._handoff_evidence.calls
     assert "other" in provider._handoff_evidence.calls
+
+
+async def test_grok_native_tool_execution_preserves_private_handoff_until_wire(monkeypatch):
+    import json
+    from src.config import GrokProviderConfig
+    from src.tools.adapters.grok import GrokToolAdapter
+    engine = _build_engine()
+    session = await _armed_session(engine, "grok-execute")
+    action = session.pending_deferred_transfer
+    action["handoff"] = CFG
+    tool = SimpleNamespace(execute=AsyncMock(return_value={"status": "success", "message": MESSAGE, "deferred_transfer": action}))
+    registry = SimpleNamespace(get=lambda name: tool, is_tool_allowed=lambda name, allowed: True)
+    events = []
+    async def sink(event):
+        events.append(event)
+    provider = GrokProvider(GrokProviderConfig(api_key="test"), sink)
+    provider._call_id = session.call_id
+    provider._session_store = engine.session_store
+    provider._ari_client = engine.ari_client
+    provider._allowed_tools = ["blind_transfer"]
+    provider.tool_adapter = GrokToolAdapter(registry)
+    payloads = []
+    async def send(payload):
+        payloads.append(json.loads(payload))
+    provider.websocket = SimpleNamespace(state=SimpleNamespace(name="OPEN"), send=send)
+    await provider._handle_function_call({"response_id": "origin", "item": {"name": "blind_transfer", "call_id": "tool-id", "arguments": "{}"}})
+    prepared = next(e for e in events if e["type"] == "HandoffPrepared")
+    sent = next(e for e in events if e["type"] == "HandoffToolResultSent")
+    assert prepared["action_id"] == sent["action_id"] == action["id"]
+    assert sent["success"] is True
+    wire = next(e for e in payloads if e["type"] == "conversation.item.create")
+    assert "deferred_transfer" not in json.loads(wire["item"]["output"])
+    assert json.loads(wire["item"]["output"])["message"] == MESSAGE
+    assert any(e["type"] == "response.create" for e in payloads)
+
+
+@pytest.mark.parametrize("case,expected", [("missing", False), ("other", False), ("cancelled", False), ("owned", True)])
+async def test_handoff_ownership_requires_matching_live_state(case, expected):
+    engine = _build_engine()
+    session = await _armed_session(engine, "ownership")
+    action = session.pending_deferred_transfer
+    action["handoff"] = CFG
+    if case != "missing":
+        state = Announcement("other" if case == "other" else action["id"], CFG)
+        if case == "cancelled":
+            state.cancel()
+        engine._transfer_handoffs[session.call_id] = state
+    assert engine._handoff_owns_pending(session.call_id, session) is expected
+
+
+async def test_missing_preparation_recovers_instead_of_stranding_pending_transfer(monkeypatch):
+    engine = _build_engine()
+    session = await _armed_session(engine, "missing-prepare")
+    action = session.pending_deferred_transfer
+    action["handoff"] = {**CFG, "start_timeout_sec": 0.01}
+    monkeypatch.setattr(engine, "_stop_deferred_transfer_stream_before_recovery", AsyncMock(return_value=True))
+    monkeypatch.setattr(engine, "_stop_deferred_transfer_playbacks_before_recovery", AsyncMock(return_value=True))
+    recovered = AsyncMock(return_value=True)
+    monkeypatch.setattr(engine, "_complete_deferred_transfer_timeout_recovery", recovered)
+    recorded = AsyncMock()
+    monkeypatch.setattr(engine, "_record_deferred_transfer_timeout_tool_result", recorded)
+    assert not await asyncio.wait_for(engine._await_transfer_handoff(session.call_id, action["id"]), 1)
+    latest = await engine.session_store.get_by_call_id(session.call_id)
+    assert latest.pending_deferred_transfer is None
+    assert not engine._handoff_owns_pending(session.call_id, latest)
+    assert recorded.await_args.kwargs["error_code"] == "deferred_transfer_preparation_failed"
+    recovered.assert_awaited_once()
+
+
+async def test_missing_preparation_wait_accepts_late_event_without_early_recovery(monkeypatch):
+    engine = _build_engine()
+    session = await _armed_session(engine, "late-prepare")
+    action = session.pending_deferred_transfer
+    action["handoff"] = {**CFG, "start_timeout_sec": 0.2}
+    recover = AsyncMock()
+    monkeypatch.setattr(engine, "_recover_failed_deferred_transfer", recover)
+    task = asyncio.create_task(engine._await_transfer_handoff(session.call_id, action["id"]))
+    await asyncio.sleep(0)
+    state = Announcement(action["id"], CFG)
+    state.seal("origin_sentence_matched")
+    engine._transfer_handoffs[session.call_id] = state
+    assert await task
+    recover.assert_not_awaited()
+
+
+async def test_missing_preparation_wait_never_cancels_replacement(monkeypatch):
+    engine = _build_engine()
+    session = await _armed_session(engine, "missing-replaced")
+    action = session.pending_deferred_transfer
+    action["handoff"] = {**CFG, "start_timeout_sec": 0.02}
+    recover = AsyncMock()
+    monkeypatch.setattr(engine, "_recover_failed_deferred_transfer", recover)
+    task = asyncio.create_task(engine._await_transfer_handoff(session.call_id, action["id"]))
+    await asyncio.sleep(0)
+    session.pending_deferred_transfer = {**action, "id": "replacement"}
+    assert not await task
+    assert session.pending_deferred_transfer["id"] == "replacement"
+    recover.assert_not_awaited()

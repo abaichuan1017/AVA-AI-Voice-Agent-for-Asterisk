@@ -21868,7 +21868,10 @@ class Engine:
 
     def _handoff_owns_pending(self, call_id, session):
         action = getattr(session, "pending_deferred_transfer", None)
-        return bool(isinstance(action, dict) and action.get("handoff"))
+        if not (isinstance(action, dict) and action.get("handoff")):
+            return False
+        state = getattr(self, "_transfer_handoffs", {}).get(call_id)
+        return bool(state and not state.cancelled and state.action_id == action.get("id"))
 
     def _observe_transfer_handoff(self, call_id, session, event):
         from src.core.transfer_handoff import Announcement
@@ -21909,11 +21912,28 @@ class Engine:
             pending = getattr(latest, "pending_deferred_transfer", None)
             return bool(latest and not latest.cleanup_in_progress and not latest.cleanup_completed
                         and isinstance(pending, dict) and pending.get("id") == action_id)
-        state = getattr(self, "_transfer_handoffs", {}).get(call_id)
-        if state is None or state.action_id != action_id:
-            # A configured provider action cannot commit on its tool-call turn
-            # before the adapter has prepared and sent its function result.
+        # A completion can race the adapter preparing its result. Allow one
+        # bounded preparation window, but never leave a flagged action owning
+        # the call indefinitely if its preparation event is lost.
+        latest = await self.session_store.get_by_call_id(call_id)
+        pending = getattr(latest, "pending_deferred_transfer", None)
+        if not isinstance(pending, dict) or pending.get("id") != action_id:
             return False
+        deadline = time.monotonic() + (pending.get("handoff") or {}).get("start_timeout_sec", 4)
+        while True:
+            if not await still_owned():
+                return False
+            state = getattr(self, "_transfer_handoffs", {}).get(call_id)
+            if state and state.action_id == action_id and not state.cancelled:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("Transfer announcement preparation timed out", call_id=call_id, action_id=action_id)
+                await self._recover_failed_deferred_transfer(
+                    call_id, action_id=action_id, preparation_failed=True,
+                )
+                return False
+            await asyncio.sleep(min(0.05, remaining))
         ready = await state.wait(still_owned)
         if ready:
             logger.info("Transfer announcement readiness", call_id=call_id,
@@ -22142,6 +22162,7 @@ class Engine:
         *,
         action_id: Any,
         commit_failed: bool = False,
+        preparation_failed: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Cancel the exact failed action and return the caller to the AI."""
         error_code = "deferred_transfer_commit_failed" if commit_failed else "deferred_audio_drain_timeout"
@@ -22150,6 +22171,9 @@ class Engine:
             if commit_failed else
             "Deferred transfer cancelled because caller-facing audio did not drain before the safety timeout."
         )
+        if preparation_failed:
+            error_code = "deferred_transfer_preparation_failed"
+            message = "Deferred transfer cancelled because announcement preparation did not complete before the safety timeout."
         session = await self.session_store.get_by_call_id(call_id)
         action = getattr(session, "pending_deferred_transfer", None) if session else None
         if (
@@ -22268,7 +22292,7 @@ class Engine:
             transfer_cfg = {}
         apology = (
             "I'm sorry, I couldn't complete that transfer. How else can I help?"
-            if commit_failed else str(
+            if commit_failed or preparation_failed else str(
                 transfer_cfg.get("deferred_audio_drain_timeout_message")
                 or "I'm sorry, I couldn't complete that transfer without interrupting you. How else can I help?"
             ).strip()

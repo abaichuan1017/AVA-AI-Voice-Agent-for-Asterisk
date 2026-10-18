@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a repeated announcement or transfer commit; see the
   [revision-pinned validation](docs/baselines/golden/transfer-announcement-743-validation.md).
   Review hardening clears completed-call evidence, admits replies when the
-  tool precedes all audio, and keeps timing fields editable until blur.
+  tool precedes all audio, preserves Grok action metadata until the wire
+  boundary, recovers when preparation evidence is missing, and keeps timing
+  fields editable until blur.
 
 ## [7.6.4] - 2026-10-16
 

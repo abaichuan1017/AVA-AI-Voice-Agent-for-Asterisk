@@ -48,11 +48,13 @@ saved announcement was retained.
 The implementation validation covered the CI-selected engine suite (3,113 tests
 passed), Admin backend (857 passed), and frontend (440 passed), plus lint,
 production build, Python compilation and committed-secret checks before the live
-calls. After review fixes, the CI-selected engine suite passed 3,131 tests (14 skipped,
-176 deselected), the frontend passed 441 tests, and lint/build passed. The 80
+calls. After review fixes, the CI-selected engine suite passed 3,139 tests (14 skipped,
+176 deselected), the frontend passed 441 tests, and lint/build passed. The 88
 focused handoff regressions include tool-before-audio replies,
 completed-call evidence cleanup across all six provider implementations, and
-clear/retype timing controls. CI on the final PR head is the authority for the
+clear/retype timing controls, native Grok execution with private action metadata,
+and missing-preparation recovery with cancellation/replacement protection. CI on
+the final PR head is the authority for the
 post-review result; these live calls remain pinned to the source revision above.
 
 All six full-agent adapters and modular pipeline/local-TTS paths have automated
