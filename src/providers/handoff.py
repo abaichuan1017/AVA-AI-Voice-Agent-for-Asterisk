@@ -51,7 +51,7 @@ class HandoffEvidence:
             # An old response must never become evidence for a replacement.
             turn = self.turn(call_id, uuid.uuid4().hex)
         else:
-            state["current"] = turn["id"] if not turn["completed"] else None
+            state["current"] = turn["id"] if turn["started_at"] is not None and not turn["completed"] else None
         turn["owner_action_id"] = action["id"]
         state["active"] = action["id"]
         state["origin_id"] = turn["id"]

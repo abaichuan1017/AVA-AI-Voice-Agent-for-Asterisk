@@ -3000,6 +3000,8 @@ class GoogleLiveProvider(AIProviderInterface):
                 await self.websocket.close()
             self._mark_ws_disconnected()
         finally:
+            # Clear evidence after background callbacks have stopped.
+            self._handoff_evidence.reset(self._call_id)
             # Clear state
             self._call_id = None
             self._session_id = None

@@ -278,7 +278,10 @@ async def test_local_blob_completion_is_not_a_duration_timer():
     await provider.prepare_handoff_result(result, "local")
     await provider._emit_agent_audio("local", b"\x7f" * 160, encoding="mulaw", sample_rate=8000)
     turn_id = provider._handoff_evidence.state("local")["origin_id"]
-    assert provider._handoff_evidence.turn("local", turn_id)["completed"]
+    completion = next(call.args[0] for call in provider.on_event.await_args_list
+                      if call.args[0]["type"] == "HandoffAudioComplete")
+    assert completion["handoff_evidence"]["completed"]
+    assert completion["handoff_evidence"]["id"] != turn_id
     for task in provider._agent_audio_done_tasks.values():
         task.cancel()
     await asyncio.gather(*provider._agent_audio_done_tasks.values(), return_exceptions=True)
@@ -475,3 +478,60 @@ async def test_google_watchdog_idle_is_not_announcement_completion():
     assert len(done) == 1
     assert not done[0]["handoff_evidence"]["completed"]
     assert "_handoff_complete" not in done[0]
+
+
+@pytest.mark.parametrize("provider_type", PROVIDERS)
+async def test_tool_before_any_audio_admits_a_paraphrased_reply(provider_type):
+    provider = provider_type.__new__(provider_type)
+    events = []
+    async def sink(event):
+        events.append(event)
+    AIProviderInterface.__init__(provider, sink)
+    await provider.on_event({"type": "ToolCall", "call_id": "c"})
+    result = {"deferred_transfer": {"id": "a", "handoff": CFG}}
+    await provider.prepare_handoff_result(result, "c")
+    prepared = events[-1]
+    announcement = Announcement("a", CFG, prepared["origin"]["id"], prepared["origin"])
+    await provider.handoff_result_sent(result, "c")
+    announcement.observe(events[-1])
+    await provider.on_event(_agent_audio("c"))
+    announcement.observe(events[-1])
+    await provider.handoff_transcript("c", "Please record your message after the tone.")
+    announcement.observe(events[-1])
+    await provider.on_event({"type": "AgentAudioDone", "call_id": "c"})
+    announcement.observe(events[-1])
+    assert announcement.sealed and announcement.reason == "reply_completed"
+    assert announcement.selected_id != prepared["origin"]["id"]
+
+
+@pytest.mark.parametrize("provider_type", PROVIDERS)
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_provider_stop_discards_only_its_completed_call_evidence(provider_type, close_fails):
+    from src.config import (GoogleProviderConfig, OpenAIRealtimeProviderConfig,
+                            GrokProviderConfig, LocalProviderConfig, LLMConfig)
+    from src.providers.elevenlabs_config import ElevenLabsAgentConfig
+    configs = {GoogleLiveProvider: GoogleProviderConfig(api_key="test"),
+               OpenAIRealtimeProvider: OpenAIRealtimeProviderConfig(api_key="test"),
+               GrokProvider: GrokProviderConfig(api_key="test"),
+               ElevenLabsAgentProvider: ElevenLabsAgentConfig(agent_id="test"),
+               LocalProvider: LocalProviderConfig()}
+    provider = (DeepgramProvider({}, LLMConfig(), AsyncMock()) if provider_type is DeepgramProvider
+                else provider_type(configs[provider_type], AsyncMock()))
+    provider._closed = False
+    provider._call_id = "ended"
+    provider.call_id = "ended"
+    provider._active_call_id = "ended"
+    provider._handoff_evidence.event(_agent_audio("ended"))
+    provider._handoff_evidence.state("other")
+    ws = SimpleNamespace(state=SimpleNamespace(name="OPEN"), close=AsyncMock(), send=AsyncMock())
+    if close_fails:
+        ws.close.side_effect = RuntimeError("test close failure")
+        ws.send.side_effect = RuntimeError("test send failure")
+    provider.websocket = ws
+    provider._ws = ws
+    try:
+        await provider.stop_session()
+    except RuntimeError:
+        assert close_fails
+    assert "ended" not in provider._handoff_evidence.calls
+    assert "other" in provider._handoff_evidence.calls

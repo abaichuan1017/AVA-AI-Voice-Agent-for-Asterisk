@@ -1,7 +1,19 @@
-import React, { useId } from 'react';
+import React, { useEffect, useId, useState } from 'react';
 
 type Handoff = { enabled?: boolean; mode?: string; message?: string; start_timeout_sec?: number; finish_timeout_sec?: number };
 type Props = { value?: Handoff; global?: Handoff; override?: boolean; disabled?: boolean; onChange: (value: Handoff) => void };
+
+function TimingInput({ label, value, fallback, max, onChange }: { label: string; value?: number; fallback: number; max: number; onChange: (value: number) => void }) {
+    const [draft, setDraft] = useState(String(value ?? fallback));
+    useEffect(() => setDraft(String(value ?? fallback)), [value, fallback]);
+    return <input aria-label={label} type="number" min={0.1} max={max} step={0.1} value={draft}
+        onChange={e => setDraft(e.target.value)} onBlur={() => {
+            const parsed = draft.trim() ? Number(draft) : fallback;
+            const next = Number.isFinite(parsed) ? Math.max(0.1, Math.min(max, parsed)) : fallback;
+            setDraft(String(next));
+            onChange(next);
+        }} className="ml-2 w-20 rounded border bg-background p-1" />;
+}
 
 export default function TransferHandoffFields({ value = {}, global, override = false, disabled = false, onChange }: Props) {
     const id = useId();
@@ -27,10 +39,7 @@ export default function TransferHandoffFields({ value = {}, global, override = f
         {!override && custom && <details><summary className="text-sm cursor-pointer">Announcement timing</summary>
             <div className="mt-2 flex flex-wrap gap-4">
                 {([['start_timeout_sec', 'Time to start speaking (seconds)', 4, 10], ['finish_timeout_sec', 'Time to finish speaking (seconds)', 20, 60]] as const).map(([key, label, fallback, max]) => <label key={key} className="text-sm">{label}
-                    <input aria-label={label} type="number" min={0.1} max={max} step={0.1} value={value[key] ?? fallback} onChange={e => {
-                        const parsed = Number(e.target.value);
-                        onChange({ ...value, [key]: Number.isFinite(parsed) ? Math.max(0.1, Math.min(max, parsed)) : fallback });
-                    }} className="ml-2 w-20 rounded border bg-background p-1" />
+                    <TimingInput label={label} value={value[key]} fallback={fallback} max={max} onChange={next => onChange({ ...value, [key]: next })} />
                 </label>)}
             </div>
         </details>}

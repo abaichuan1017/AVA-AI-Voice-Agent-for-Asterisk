@@ -1828,3 +1828,27 @@ later response does not verify its wording. On timeout the engine continues the
 existing transfer process. Runtime logs record action ID and readiness reason
 without adding announcement text. In-memory waiting state is discarded on call
 cleanup/restart; cancelled actions are never recreated from timing evidence.
+
+
+#### Prompt guidance and verification
+
+Keep the announcement in Tools configuration rather than duplicating its wording
+in a normal Agent prompt. After a successful deferred-transfer tool result, the
+Agent should follow the returned speech instructions, say the configured sentence
+once, and avoid follow-up speech while the transfer is pending. Respect
+`ai_should_speak=false` for engine-owned audio. Availability checks and Agent
+resource restrictions still apply. Restoring a pre-test Agent prompt does not
+reset the separately saved Tools announcement.
+
+Verify both a filler/tool turn followed by the announcement in a later response
+and an announcement contained in the originating response. In the runtime logs,
+expect `Transfer announcement readiness` with `reply_completed` and
+`origin_sentence_matched`, respectively, followed by caller-facing audio drain
+and one successful transfer commit. These reasons describe event evidence; a
+later response's wording is not verified by the coordinator. Also cover
+cancellation, missing audio/completion deadlines, destination failure, cleanup,
+and announcement-disabled behavior when qualifying a deployment.
+
+The [#743 validation record](baselines/golden/transfer-announcement-743-validation.md)
+separates Google Live call evidence from automated coverage for other providers
+and pipelines. A successful provider readiness check is not a live transfer test.

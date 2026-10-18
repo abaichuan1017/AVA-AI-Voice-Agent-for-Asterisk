@@ -510,6 +510,7 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
             
             logger.info(f"[elevenlabs] [{previous_call_id}] Session stopped")
         finally:
+            self._handoff_evidence.reset(previous_call_id)
             self._closing = False
             self._closed = True
             self._in_audio_burst = False

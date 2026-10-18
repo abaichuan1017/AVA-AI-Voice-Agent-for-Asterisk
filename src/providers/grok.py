@@ -1022,6 +1022,7 @@ class GrokProvider(AIProviderInterface):
             except Exception:
                 pass
             previous_call_id = self._call_id
+            self._handoff_evidence.reset(previous_call_id)
             self._receive_task = None
             self._keepalive_task = None
             self._greeting_vad_task = None

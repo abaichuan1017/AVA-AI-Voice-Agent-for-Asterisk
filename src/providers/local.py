@@ -1989,6 +1989,7 @@ class LocalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
                 if task and not task.done():
                     task.cancel()
         
+        self._handoff_evidence.reset(target_call_id)
         # DON'T clear the active call ID immediately - keep it for AgentAudio processing
         # The call_id will be cleared when the TTS playback is complete
         # self._active_call_id = None
@@ -2058,6 +2059,7 @@ class LocalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         self._barge_in_ack_tasks.clear()
         self._tts_audio_meta_by_call.clear()
         self._pending_tts_audio_meta.clear()
+        self._handoff_evidence.reset(self._active_call_id)
         self._active_call_id = None
         self._last_system_prompt_digest = None
         logger.info("Local AI provider connection closed permanently")
@@ -2065,6 +2067,7 @@ class LocalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
     async def clear_active_call_id(self):
         """Clear the active call ID after TTS playback is complete."""
         old_call_id = self._active_call_id
+        self._handoff_evidence.reset(old_call_id)
         if old_call_id:
             self._tts_audio_meta_by_call.pop(old_call_id, None)
             self._last_user_transcript_by_call.pop(old_call_id, None)

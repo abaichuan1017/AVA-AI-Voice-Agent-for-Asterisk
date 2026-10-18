@@ -1539,6 +1539,7 @@ class DeepgramProvider(AIProviderInterface):
         finally:
             self._receive_task = None
             self._clear_metrics(self.call_id)
+            self._handoff_evidence.reset(self.call_id)
             self.call_id = None
             self._farewell_fallback_state = {}
             self._closing = False
