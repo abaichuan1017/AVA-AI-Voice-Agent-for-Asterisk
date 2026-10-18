@@ -218,6 +218,7 @@ class GrokToolAdapter:
             logger.error("No call_id in result, cannot send response")
             return
 
+        output_sent = False
         try:
             safe_result = sanitize_tool_result_for_json_string(
                 result,
@@ -233,6 +234,7 @@ class GrokToolAdapter:
                 },
             }
             await websocket.send(json.dumps(output_event))
+            output_sent = True
             notify = context.get("handoff_result_sent")
             if notify:
                 await notify(result, context.get("call_id"), success=True)
@@ -278,6 +280,7 @@ class GrokToolAdapter:
 
         except Exception as e:
             notify = context.get("handoff_result_sent")
-            if notify:
+            if notify and not output_sent:
                 await notify(result, context.get("call_id"), success=False)
-            logger.error(f"Failed to send tool result to Grok: {e}", exc_info=True)
+            failure = "Delivered tool result follow-up failed" if output_sent else "Tool result send failed"
+            logger.error(f"{failure} (Grok): {e}", exc_info=True)

@@ -156,6 +156,7 @@ async def test_native_tool_delivery_boundary_precedes_response_request(module, c
     assert seen[1] == "sent"
     if module != "deepgram":
         assert seen[2] == "response.create"
+        assert "failed" not in seen  # response.create failure cannot retract delivery
 
 
 async def test_engine_delayed_sentence_and_immediate_repeat_race(monkeypatch):
@@ -633,3 +634,168 @@ async def test_missing_preparation_wait_never_cancels_replacement(monkeypatch):
     assert not await task
     assert session.pending_deferred_transfer["id"] == "replacement"
     recover.assert_not_awaited()
+
+
+@pytest.mark.parametrize("module,class_name", [("openai", "OpenAIToolAdapter"), ("grok", "GrokToolAdapter"), ("deepgram", "DeepgramToolAdapter")])
+async def test_failed_function_output_reports_failure_without_success(module, class_name):
+    import importlib
+    adapter = getattr(importlib.import_module("src.tools.adapters." + module), class_name)(None)
+    notify = AsyncMock()
+    ws = SimpleNamespace(send=AsyncMock(side_effect=RuntimeError("output failed")))
+    result = {"status": "success", "deferred_transfer": {"id": "a", "handoff": CFG},
+              "call_id": "native", "function_call_id": "native", "function_name": "blind_transfer"}
+    await adapter.send_tool_result(result, {"websocket": ws, "call_id": "c", "handoff_result_sent": notify})
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["success"] is False
+
+
+@pytest.mark.parametrize("kind", ["pipeline", "engine"])
+@pytest.mark.parametrize("cancel,stop_ok", [(False, True), (True, True), (False, False)])
+async def test_pipeline_startup_deadline_cleans_exact_playback_or_retains_uncertain_owner(monkeypatch, tmp_path, cancel, stop_ok, kind):
+    engine = _build_engine()
+    session = await _armed_session(engine, "pipeline-start-stall")
+    action = session.pending_deferred_transfer
+    action["handoff"] = {**CFG, "finish_timeout_sec": 0.03 if not cancel else 1}
+    async def synth(*args):
+        yield b"\x7f" * 160
+    pipeline = SimpleNamespace(tts_adapter=SimpleNamespace(synthesize=synth), tts_options={})
+    monkeypatch.setattr(engine, "_pipeline_audio_for_file_playback", lambda options, audio: audio)
+    path = tmp_path / "announcement.ulaw"
+    async def create(*args):
+        path.write_bytes(b"audio")
+        return str(path)
+    monkeypatch.setattr(engine.playback_manager, "_create_audio_file", create)
+    entered = asyncio.Event()
+    started = []
+    async def stalled_ari(session, file, playback_id):
+        started.append(playback_id)
+        entered.set()
+        await asyncio.Event().wait()
+    monkeypatch.setattr(engine.playback_manager, "_play_via_ari", stalled_ari)
+    stop = AsyncMock(return_value=True)
+    if not stop_ok:
+        stop.side_effect = [False, True]
+    monkeypatch.setattr(engine.ari_client, "stop_playback", stop)
+    if kind == "pipeline":
+        operation = engine._speak_pipeline_transfer_announcement(session.call_id, pipeline, MESSAGE, action)
+    else:
+        session.provider_name = "deepgram"
+        monkeypatch.setattr(engine, "_local_ai_server_tts", AsyncMock(return_value=b"audio"))
+        operation = engine._play_deferred_transfer_local_handoff(session.call_id, session)
+    task = asyncio.create_task(operation)
+    await asyncio.wait_for(entered.wait(), 1)
+    if cancel:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        assert not await asyncio.wait_for(task, 0.5)
+    pid = started[0]
+    ref = await engine.session_store.get_playback(pid)
+    latest = await engine.session_store.get_by_call_id(session.call_id)
+    if stop_ok:
+        assert ref is None and pid not in latest.tts_tokens and not path.exists()
+    else:
+        # An ambiguous remote stop cannot be treated as drained output.
+        assert ref is not None and pid in latest.tts_tokens and path.exists()
+        session.pending_deferred_transfer = {**action, "id": "replacement"}
+        await engine.session_store.set_gating_token(session.call_id, "replacement-token")
+        await engine.playback_manager._gating_fallback_task(session.call_id, pid, 0)
+        assert await engine.session_store.get_playback(pid) is not None
+    await asyncio.gather(*list(engine._call_bg_tasks.get(session.call_id, ())))
+    assert await engine.session_store.get_playback(pid) is None
+    assert not path.exists()
+    if not stop_ok:
+        latest = await engine.session_store.get_by_call_id(session.call_id)
+        assert latest.pending_deferred_transfer["id"] == "replacement"
+        assert "replacement-token" in latest.tts_tokens and pid not in latest.tts_tokens
+        await engine.session_store.clear_gating_token(session.call_id, "replacement-token")
+    if kind == "pipeline":
+        state = engine._transfer_handoffs[session.call_id]
+        assert state.cancelled if cancel else state.sealed
+
+
+@pytest.mark.parametrize("local_enabled", [True, False])
+async def test_deepgram_announcement_selects_one_speech_owner(monkeypatch, local_enabled):
+    from src.tools.telephony.deferred_transfer import store_pending_deferred_transfer
+    engine = _build_engine()
+    session = await _armed_session(engine, "deepgram-owner")
+    session.provider_name = "deepgram"
+    action = session.pending_deferred_transfer
+    transfer = {"handoff": {"enabled": True, **CFG}, "local_handoff_audio_providers": ["deepgram"] if local_enabled else []}
+    values = {"tools.transfer": transfer, "providers": {"deepgram": {"type": "deepgram"}}}
+    context = SimpleNamespace(call_id=session.call_id, provider_name="deepgram", get_session=AsyncMock(return_value=session),
+                              get_config_value=lambda key: values.get(key), session_store=engine.session_store)
+    await store_pending_deferred_transfer(context, action)
+    result = build_deferred_transfer_result(action=action, message="legacy")
+    assert action["handoff"]["owner"] == ("engine" if local_enabled else "provider")
+    if local_enabled:
+        assert result["ai_should_speak"] is False
+        # Engine ownership seals before observing any provider speech.
+        commit = AsyncMock()
+        monkeypatch.setattr(engine, "_commit_pending_deferred_transfer_for_call", commit)
+        engine._observe_transfer_handoff(session.call_id, session, {"type": "HandoffPrepared", "action_id": action["id"]})
+        assert engine._transfer_handoffs[session.call_id].reason == "engine_announcement"
+        await asyncio.gather(*list(engine._call_bg_tasks.get(session.call_id, ())))
+    else:
+        assert result.get("ai_should_speak", True)
+        monkeypatch.setattr(engine, "_deferred_transfer_local_handoff_providers", lambda target: set())
+        synth = AsyncMock()
+        monkeypatch.setattr(engine, "_local_ai_server_tts", synth)
+        assert not await engine._play_deferred_transfer_local_handoff(session.call_id, session)
+        synth.assert_not_awaited()
+
+
+async def test_cancelled_audio_file_write_cleans_up_after_worker_finishes(monkeypatch, tmp_path):
+    import src.core.playback_manager as playback_module
+    engine = _build_engine()
+    manager = engine.playback_manager
+    manager.media_dir = str(tmp_path)
+    entered, release, cleaned = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def worker(write):
+        entered.set()
+        await release.wait()
+        write()
+    monkeypatch.setattr(playback_module.asyncio, "to_thread", worker)
+    original_cleanup = manager._cleanup_audio_file
+    async def cleanup(path):
+        await original_cleanup(path)
+        cleaned.set()
+    monkeypatch.setattr(manager, "_cleanup_audio_file", cleanup)
+    task = asyncio.create_task(manager._create_audio_file(b"audio", "cancel-write"))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    await asyncio.wait_for(cleaned.wait(), 1)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("kind", ["pipeline", "engine"])
+async def test_superseded_action_stops_only_its_late_startup_playback(monkeypatch, kind):
+    engine = _build_engine()
+    session = await _armed_session(engine, "startup-replaced")
+    action = session.pending_deferred_transfer
+    action["handoff"] = CFG
+    async def synth(*args):
+        yield b"audio"
+    pipeline = SimpleNamespace(tts_adapter=SimpleNamespace(synthesize=synth), tts_options={})
+    monkeypatch.setattr(engine, "_pipeline_audio_for_file_playback", lambda options, audio: audio)
+    async def startup(*args):
+        session.pending_deferred_transfer = {**action, "id": "replacement"}
+        return "old-playback"
+    monkeypatch.setattr(engine.playback_manager, "play_audio", startup)
+    wait = AsyncMock()
+    monkeypatch.setattr(engine.playback_manager, "wait_for_playback_end", wait)
+    stop = AsyncMock(return_value=True)
+    monkeypatch.setattr(engine, "_stop_transfer_announcement_playback", stop)
+    if kind == "pipeline":
+        assert not await engine._speak_pipeline_transfer_announcement(session.call_id, pipeline, MESSAGE, action)
+    else:
+        session.provider_name = "deepgram"
+        monkeypatch.setattr(engine, "_local_ai_server_tts", AsyncMock(return_value=b"audio"))
+        assert not await engine._play_deferred_transfer_local_handoff(session.call_id, session)
+    stop.assert_awaited_once_with(session.call_id, "old-playback")
+    wait.assert_not_awaited()
+    assert session.pending_deferred_transfer["id"] == "replacement"

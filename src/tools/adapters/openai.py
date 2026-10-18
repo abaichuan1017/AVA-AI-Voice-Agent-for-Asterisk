@@ -261,6 +261,7 @@ class OpenAIToolAdapter:
             logger.error("No call_id in result, cannot send response")
             return
         
+        output_sent = False
         try:
             # Step 1: Send function_call_output
             safe_result = sanitize_tool_result_for_json_string(result, max_bytes=12000, tool_name=function_name)
@@ -273,6 +274,7 @@ class OpenAIToolAdapter:
                 }
             }
             await websocket.send(json.dumps(output_event))
+            output_sent = True
             notify = context.get("handoff_result_sent")
             if notify:
                 await notify(result, context.get("call_id"), success=True)
@@ -341,6 +343,7 @@ class OpenAIToolAdapter:
             
         except Exception as e:
             notify = context.get("handoff_result_sent")
-            if notify:
+            if notify and not output_sent:
                 await notify(result, context.get("call_id"), success=False)
-            logger.error(f"Failed to send tool result to OpenAI: {e}", exc_info=True)
+            failure = "Delivered tool result follow-up failed" if output_sent else "Tool result send failed"
+            logger.error(f"{failure} (OpenAI): {e}", exc_info=True)

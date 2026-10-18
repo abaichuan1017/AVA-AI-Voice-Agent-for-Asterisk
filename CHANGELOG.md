@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Review hardening clears completed-call evidence, admits replies when the
   tool precedes all audio, preserves Grok action metadata until the wire
   boundary, recovers when preparation evidence is missing, and keeps timing
-  fields editable until blur.
+  fields editable until blur. Announcement playback startup is bounded and
+  cancellation retains ownership until a remote stop is confirmed; delivered
+  function outputs are not reclassified when a later response request fails.
 
 ## [7.6.4] - 2026-10-16
 

@@ -21829,6 +21829,12 @@ class Engine:
             state = Announcement(action["id"], dict(handoff))
             self._transfer_handoffs[call_id] = state
 
+        deadline = time.monotonic() + handoff["finish_timeout_sec"] if handoff else None
+        playback_id = None
+
+        def remaining():
+            return max(0.001, deadline - time.monotonic())
+
         async def synthesize():
             audio = bytearray()
             async for chunk in pipeline.tts_adapter.synthesize(call_id, message, pipeline.tts_options):
@@ -21837,7 +21843,7 @@ class Engine:
             return bytes(audio)
 
         try:
-            audio = await asyncio.wait_for(synthesize(), handoff["finish_timeout_sec"]) if handoff else await synthesize()
+            audio = await asyncio.wait_for(synthesize(), remaining()) if handoff else await synthesize()
             if handoff:
                 latest = await self.session_store.get_by_call_id(call_id)
                 pending = getattr(latest, "pending_deferred_transfer", None)
@@ -21846,10 +21852,19 @@ class Engine:
                     return False
             if audio:
                 audio = self._pipeline_audio_for_file_playback(pipeline.tts_options, audio)
-                playback_id = await self.playback_manager.play_audio(call_id, audio, "pipeline-transfer")
+                startup = self.playback_manager.play_audio(call_id, audio, "pipeline-transfer")
+                playback_id = await asyncio.wait_for(startup, remaining()) if handoff else await startup
                 if playback_id:
-                    timeout = handoff["finish_timeout_sec"] if handoff else len(audio) / 8000.0 + 3.0
-                    played = await self.playback_manager.wait_for_playback_end(call_id, playback_id, timeout_sec=timeout)
+                    if handoff:
+                        latest = await self.session_store.get_by_call_id(call_id)
+                        pending = getattr(latest, "pending_deferred_transfer", None)
+                        if not latest or latest.cleanup_in_progress or not isinstance(pending, dict) or pending.get("id") != action["id"]:
+                            state.cancel()
+                            await self._stop_transfer_announcement_playback(call_id, playback_id)
+                            return False
+                    timeout = remaining() if handoff else len(audio) / 8000.0 + 3.0
+                    completion = self.playback_manager.wait_for_playback_end(call_id, playback_id, timeout_sec=timeout)
+                    played = await asyncio.wait_for(completion, remaining()) if handoff else await completion
                     if state:
                         state.seal("pipeline_announcement_completed" if played else "pipeline_playback_timeout")
                     return bool(played)
@@ -21859,12 +21874,30 @@ class Engine:
         except asyncio.CancelledError:
             if state:
                 state.cancel()
+            if handoff and playback_id:
+                await self._stop_transfer_announcement_playback(call_id, playback_id)
             raise
+        except asyncio.TimeoutError:
+            if state:
+                state.seal("pipeline_announcement_timeout")
+            logger.warning("Pipeline transfer announcement deadline expired; using existing transfer drain", call_id=call_id)
+            return False
         except Exception:
             if state:
                 state.seal("pipeline_tts_failed")
             logger.error("Deferred transfer TTS failed; using existing transfer drain", call_id=call_id, exc_info=True)
             return False
+
+    async def _stop_transfer_announcement_playback(self, call_id, playback_id):
+        await self.playback_manager.retain_cancelled_playback(call_id, playback_id)
+        try:
+            if await asyncio.wait_for(self.ari_client.stop_playback(playback_id), 1.0):
+                await self.playback_manager.on_playback_finished(playback_id)
+                return True
+        except Exception:
+            pass
+        logger.warning("Transfer announcement stop unconfirmed; retaining output ownership", call_id=call_id, playback_id=playback_id)
+        return False
 
     def _handoff_owns_pending(self, call_id, session):
         action = getattr(session, "pending_deferred_transfer", None)
@@ -22734,7 +22767,13 @@ class Engine:
             if not latest or latest.cleanup_in_progress or not isinstance(pending, dict) or pending.get("id") != action.get("id"):
                 return False
 
-        playback_id = await self.playback_manager.play_audio(call_id, audio, "transfer-handoff")
+        startup = self.playback_manager.play_audio(call_id, audio, "transfer-handoff")
+        try:
+            playback_id = (await asyncio.wait_for(startup, action["handoff"]["finish_timeout_sec"])
+                           if action.get("handoff") else await startup)
+        except asyncio.TimeoutError:
+            logger.warning("Local transfer announcement startup timed out; using existing transfer drain", call_id=call_id)
+            return False
         if not playback_id:
             logger.warning(
                 "Deferred transfer local handoff playback failed",
@@ -22743,6 +22782,12 @@ class Engine:
             )
             return False
 
+        if action.get("handoff"):
+            latest = await self.session_store.get_by_call_id(call_id)
+            pending = getattr(latest, "pending_deferred_transfer", None)
+            if not latest or latest.cleanup_in_progress or not isinstance(pending, dict) or pending.get("id") != action.get("id"):
+                await self._stop_transfer_announcement_playback(call_id, playback_id)
+                return False
         wait_timeout = min(10.0, max(1.0, (len(audio) / 8000.0) + 1.0))
         playback_wait = asyncio.create_task(self.playback_manager.wait_for_playback_end(
             call_id, playback_id, timeout_sec=wait_timeout,
@@ -22752,10 +22797,14 @@ class Engine:
                 latest = await self.session_store.get_by_call_id(call_id)
                 pending = getattr(latest, "pending_deferred_transfer", None)
                 if not latest or latest.cleanup_in_progress or not isinstance(pending, dict) or pending.get("id") != action.get("id"):
-                    await self.ari_client.stop_playback(playback_id)
+                    await self._stop_transfer_announcement_playback(call_id, playback_id)
                     return False
                 await asyncio.wait({playback_wait}, timeout=0.1)
             played = await playback_wait
+        except asyncio.CancelledError:
+            if action.get("handoff"):
+                await self._stop_transfer_announcement_playback(call_id, playback_id)
+            raise
         finally:
             if not playback_wait.done():
                 playback_wait.cancel()
