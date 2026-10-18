@@ -2207,7 +2207,7 @@ class DeepgramProvider(AIProviderInterface):
                 try:
                     await self.on_event({
                         'type': 'AgentAudioDone',
-                        'streaming_done': True,
+                        'streaming_done': True, '_handoff_complete': False,
                         'call_id': self.call_id
                     })
                     await self._emit_farewell_fallback_if_needed(had_audio=True)

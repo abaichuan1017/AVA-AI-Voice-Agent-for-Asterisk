@@ -454,3 +454,24 @@ async def test_pipeline_announcement_uses_shared_coordinator_and_exact_sentence(
     assert state.sealed and state.action_id == action["id"]
     assert result is (shape in {"stream", "blob"})
     assert await engine._await_transfer_handoff(session.call_id, action["id"])
+
+
+async def test_google_watchdog_idle_is_not_announcement_completion():
+    import time
+    from src.config import GoogleProviderConfig
+    provider = GoogleLiveProvider(GoogleProviderConfig(api_key="test"), AsyncMock())
+    provider._call_id = "idle-watchdog"
+    await provider.on_event(_agent_audio(provider._call_id))
+    await provider.prepare_handoff_result({"deferred_transfer": {"id": "a", "handoff": CFG}}, provider._call_id)
+    provider._hangup_fallback_armed = True
+    provider._hangup_fallback_armed_at = time.monotonic() - 10
+    provider._hangup_fallback_audio_started = True
+    provider._hangup_fallback_turn_complete_seen = True
+    provider._last_audio_out_monotonic = time.monotonic() - 10
+    provider._in_audio_burst = True
+    provider._flush_pending_user_transcription = AsyncMock()
+    await asyncio.wait_for(provider._hangup_fallback_watchdog_loop(), 1)
+    done = [c.args[0] for c in provider.on_event.await_args_list if c.args[0]["type"] == "AgentAudioDone"]
+    assert len(done) == 1
+    assert not done[0]["handoff_evidence"]["completed"]
+    assert "_handoff_complete" not in done[0]

@@ -680,7 +680,7 @@ class GoogleLiveProvider(AIProviderInterface):
                             {
                                 "type": "AgentAudioDone",
                                 "call_id": call_id,
-                                "streaming_done": True,
+                                "streaming_done": True, "_handoff_complete": False,
                             }
                         )
 
@@ -2574,7 +2574,7 @@ class GoogleLiveProvider(AIProviderInterface):
                             await self.on_event({
                                 "type": "AgentAudioDone",
                                 "call_id": self._call_id,
-                                "streaming_done": True,
+                                "streaming_done": True, "_handoff_complete": False,
                             })
                         if self.on_event and not self._hangup_ready_emitted:
                             await self.on_event({
