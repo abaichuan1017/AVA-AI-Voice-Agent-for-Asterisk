@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   latest draft, including Microsoft timezone/calendar fallback values edited
   during sign-in. Keep blur-committed fields in saves, block editing after a failed
   configuration load, and distinguish failed/partial reloads from full application.
+  Restore keyboard focus after HTTP editing and match accessible action names
+  to the visible Configure labels.
 
 - **Deferred transfer announcements (#743):** optional global and per-target
   announcement waiting across all full-agent providers and modular pipelines.

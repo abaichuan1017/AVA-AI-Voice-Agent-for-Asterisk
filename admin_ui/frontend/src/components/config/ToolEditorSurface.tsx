@@ -1,14 +1,21 @@
-import { ComponentProps, useEffect, useRef } from 'react';
+import { ComponentProps, RefObject, useEffect, useRef } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 
 // Use the same form and footer in either presentation. Embedded callers keep
 // their existing modal; the Tools page gets a full-width, accessible editor.
-export function ToolEditorSurface({ inline, ...props }: ComponentProps<typeof Modal> & { inline?: boolean }) {
+export function ToolEditorSurface({ inline, fallbackFocusRef, ...props }: ComponentProps<typeof Modal> & { inline?: boolean; fallbackFocusRef?: RefObject<HTMLElement> }) {
     const titleRef = useRef<HTMLHeadingElement>(null);
     useEffect(() => {
-        if (inline && props.isOpen) titleRef.current?.focus();
-    }, [inline, props.isOpen]);
+        if (!inline || !props.isOpen) return;
+        const previouslyFocused = document.activeElement as HTMLElement | null;
+        titleRef.current?.focus();
+        return () => {
+            // An updated tool may no longer match the active search filter.
+            const target = previouslyFocused?.isConnected ? previouslyFocused : fallbackFocusRef?.current;
+            target?.focus();
+        };
+    }, [inline, props.isOpen, fallbackFocusRef]);
     if (!inline) return <Modal {...props} />;
     if (!props.isOpen) return null;
     return (

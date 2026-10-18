@@ -133,15 +133,17 @@ describe('Tools list and dedicated editors', () => {
         expect(axios.post).not.toHaveBeenCalled();
     });
 
-    it('keeps HTTP editing inline and stages changes without publishing until Save & Apply', async () => {
+    it.each(['', 'example.com/lookup'])('stages inline HTTP edits and restores focus with search %s', async query => {
+        const user = userEvent.setup();
         render(<ToolsPage />);
-        await screen.findByRole('button', { name: 'Edit lookup' });
-        fireEvent.click(screen.getByRole('button', { name: 'Edit lookup' }));
+        fireEvent.change(await screen.findByRole('textbox', { name: 'Search tools' }), { target: { value: query } });
+        await user.click(await screen.findByRole('button', { name: 'Configure lookup' }));
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-        expect(screen.getByRole('heading', { name: 'Edit lookup' })).toBeVisible();
+        expect(screen.getByRole('heading', { name: 'Edit lookup' })).toHaveFocus();
         expect(screen.queryByRole('button', { name: 'Save & Apply' })).not.toBeInTheDocument();
         fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.com/new-lookup' } });
         fireEvent.click(screen.getByRole('button', { name: 'Update tool' }));
+        expect(screen.getByRole('button', { name: query ? 'Add Tool' : 'Configure lookup' })).toHaveFocus();
         expect(axios.post).not.toHaveBeenCalled();
         fireEvent.click(await screen.findByRole('button', { name: 'Save & Apply' }));
         await screen.findByText(/Applied as tool generation 9/);
@@ -152,13 +154,25 @@ describe('Tools list and dedicated editors', () => {
         expect(saved.contexts).toEqual(fixture().contexts);
     });
 
-    it('cancels an HTTP draft without modifying the page draft or issuing a request', async () => {
+    it.each(['Cancel', 'Cancel and return to tools'])('discards an HTTP draft and restores focus with %s', async cancelLabel => {
+        const user = userEvent.setup();
         render(<ToolsPage />);
-        fireEvent.click(await screen.findByRole('button', { name: 'Edit lookup' }));
+        await user.click(await screen.findByRole('button', { name: 'Configure lookup' }));
         fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://example.com/discard' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Cancel and return to tools' }));
-        fireEvent.click(await screen.findByRole('button', { name: 'Edit lookup' }));
+        await user.click(screen.getByRole('button', { name: cancelLabel }));
+        expect(screen.getByRole('button', { name: 'Configure lookup' })).toHaveFocus();
+        fireEvent.click(screen.getByRole('button', { name: 'Configure lookup' }));
         expect(screen.getByLabelText('URL')).toHaveValue('https://example.com/lookup');
+        expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('restores focus to Add Tool when a new HTTP draft is cancelled', async () => {
+        const user = userEvent.setup();
+        render(<ToolsPage />);
+        await user.click(await screen.findByRole('button', { name: 'Add Tool' }));
+        expect(screen.getByRole('heading', { name: 'Add In-Call HTTP Tool' })).toHaveFocus();
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.getByRole('button', { name: 'Add Tool' })).toHaveFocus();
         expect(axios.post).not.toHaveBeenCalled();
     });
 
@@ -255,7 +269,7 @@ describe('Tools persistence and apply outcomes', () => {
         await screen.findByRole('heading', { name: 'Tools' });
         fireEvent.click(screen.getByRole('button', { name: phase }));
         const key = phase === 'Pre-Call' ? 'before' : 'after';
-        fireEvent.click(screen.getByRole('button', { name: `Edit ${key}` }));
+        fireEvent.click(screen.getByRole('button', { name: `Configure ${key}` }));
         fireEvent.change(screen.getByLabelText('URL'), { target: { value: `https://example.com/new-${key}` } });
         fireEvent.click(screen.getByRole('button', { name: 'Update tool' }));
         fireEvent.click(await screen.findByRole('button', { name: 'Save & Apply' }));

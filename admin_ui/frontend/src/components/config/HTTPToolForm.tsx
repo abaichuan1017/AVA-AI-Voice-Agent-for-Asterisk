@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
@@ -134,6 +134,7 @@ const editorTextareaClass =
     'w-full rounded-md border border-input bg-background p-3 text-sm text-foreground caret-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
 
 const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal', onEditingChange, query = '' }: HTTPToolFormProps) => {
+    const addToolButtonRef = useRef<HTMLButtonElement>(null);
     const { confirm } = useConfirmDialog();
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
@@ -653,6 +654,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                     <p className="text-xs text-muted-foreground mt-1">{phaseConfig.desc}</p>
                 </div>
                 <button
+                    ref={addToolButtonRef}
                     onClick={handleAddTool}
                     className="text-xs flex items-center bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 transition-colors"
                 >
@@ -698,7 +700,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                             <div className="flex items-center gap-1">
                                 <button
                                     onClick={() => handleEditTool(key, tool)}
-                                    aria-label={`Edit ${key}`}
+                                    aria-label={presentation === 'page' ? `Configure ${key}` : `Edit ${key}`}
                                     className="p-1.5 hover:bg-background rounded text-muted-foreground hover:text-foreground"
                                 >
                                     {presentation === 'page' ? 'Configure' : <Settings className="w-4 h-4" />}
@@ -720,6 +722,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
             </div>
             <ToolEditorSurface
                 inline={presentation === 'page'}
+                fallbackFocusRef={addToolButtonRef}
                 isOpen={!!editingTool}
                 onClose={closeEditor}
                 size="xl"
