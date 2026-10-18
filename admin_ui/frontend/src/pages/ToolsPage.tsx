@@ -3,10 +3,12 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import yaml from 'js-yaml';
-import { Save, AlertCircle, RefreshCw, Loader2, Phone, Webhook, Search, BookOpen, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Save, AlertCircle, RefreshCw, Loader2, Search, BookOpen, ChevronDown, ChevronRight } from 'lucide-react';
 import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
+import { ToolList } from '../components/config/ToolList';
+import { ToolSection, toolSections, toolDefaults } from '../components/config/toolSections';
 import ToolForm from '../components/config/ToolForm';
 import HTTPToolForm from '../components/config/HTTPToolForm';
 import { useAuth } from '../auth/AuthContext';
@@ -36,8 +38,41 @@ type ToolDef = {
 const ToolsPage = () => {
     const { confirm } = useConfirmDialog();
     const { token } = useAuth();
-    const [config, setConfig] = useState<any>(() => getCachedConfig()?.config ?? {});
+    const [config, setConfigState] = useState<any>(() => getCachedConfig()?.config ?? {});
+    const [savedSignature, setSavedSignature] = useState(() => JSON.stringify(getCachedConfig()?.config ?? {}));
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [selectedSection, setSelectedSection] = useState<ToolSection | null>(null);
+    const [query, setQuery] = useState('');
+    const [httpEditing, setHttpEditing] = useState(false);
+    const headingRef = useRef<HTMLHeadingElement>(null);
+    const selectionTriggerRef = useRef<HTMLElement | null>(null);
     const configRef = useRef<any>(getCachedConfig()?.config ?? {});
+    // Commit synchronously to the ref too: blur-committed inputs and immediate
+    // template saves must see the same draft as the page Save action.
+    const setConfig = (update: any) => {
+        const next = typeof update === 'function' ? update(configRef.current) : update;
+        configRef.current = next;
+        setConfigState(next);
+    };
+    const dirty = JSON.stringify(config) !== savedSignature;
+    const selectedTool = selectedSection === 'defaults' ? toolDefaults : toolSections.find(tool => tool.key === selectedSection);
+    const selectSection = (section: ToolSection) => {
+        selectionTriggerRef.current = document.activeElement as HTMLElement;
+        setSelectedSection(section);
+    };
+    useEffect(() => {
+        if (selectedSection) headingRef.current?.focus();
+        else selectionTriggerRef.current?.focus();
+    }, [selectedSection]);
+    useEffect(() => {
+        const warn = (event: BeforeUnloadEvent) => {
+            if (!dirty && !httpEditing) return;
+            event.preventDefault();
+            event.returnValue = '';
+        };
+        window.addEventListener('beforeunload', warn);
+        return () => window.removeEventListener('beforeunload', warn);
+    }, [dirty, httpEditing]);
     const [loading, setLoading] = useState(() => getCachedConfig() == null);
     const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(() => getCachedConfig()?.yamlError ?? null);
     const [saving, setSaving] = useState(false);
@@ -101,10 +136,12 @@ const ToolsPage = () => {
         try {
             const r = await loadConfigYaml(force);
             setConfig(r.config);
+            setSavedSignature(JSON.stringify(r.config));
+            setLoadError(null);
             setYamlError(r.yamlError);
         } catch (err) {
             console.error('Failed to load config', err);
-            setYamlError(null);
+            setLoadError('Unable to load the configuration. Retry before editing or saving tools.');
         } finally {
             setLoading(false);
         }
@@ -134,6 +171,7 @@ const ToolsPage = () => {
                 headers: { Authorization: `Bearer ${token}` },
                 timeout: 30000  // 30 second timeout
             });
+            setSavedSignature(JSON.stringify(nextConfig));
             await refetch();
             if (successToast) toast.success(successToast);
         } catch (err: any) {
@@ -151,21 +189,30 @@ const ToolsPage = () => {
         setApplyStatus(null);
         let configSaved = false;
         try {
-            const sanitized = sanitizeConfigForSave(configRef.current);
+            const snapshot = configRef.current;
+            const sanitized = sanitizeConfigForSave(snapshot);
             const saved = await axios.post('/api/config/yaml', { content: yaml.dump(sanitized) }, {
                 headers: { Authorization: `Bearer ${token}` }, timeout: 30000,
             });
             configSaved = true;
+            setSavedSignature(JSON.stringify(snapshot));
             if (saved.data?.recommended_apply_method === 'hot_reload') {
                 const applied = await axios.post('/api/system/containers/ai_engine/reload', {}, {
                     headers: { Authorization: `Bearer ${token}` }, timeout: 30000,
                 });
-                const generation = applied.data?.tool_generation;
-                const message = `Applied${generation ? ` as tool generation ${generation}` : ''}. New calls use it; active calls remain unchanged.`;
-                setApplyStatus(message);
-                toast.success('Tools saved and applied', { description: message });
+                if (applied.data?.restart_required) {
+                    setApplyStatus('Saved and partially applied. Restart the AI Engine to finish applying changes.');
+                    toast.warning('Restart still required', { description: applied.data?.message });
+                } else {
+                    const generation = applied.data?.tool_generation;
+                    const message = `Applied${generation ? ` as tool generation ${generation}` : ''}. New calls use it; active calls remain unchanged.`;
+                    setApplyStatus(message);
+                    toast.success('Tools saved and applied', { description: message });
+                }
             } else {
-                setApplyStatus('Saved. A restart is required for these changes.');
+                setApplyStatus(saved.data?.recommended_apply_method === 'none'
+                    ? 'Saved. No apply action is required.'
+                    : 'Saved. A restart is required for these changes.');
                 toast.success('Tools configuration saved');
             }
             await refetch();
@@ -175,6 +222,7 @@ const ToolsPage = () => {
                 ? 'Saved changes could not be applied; the previous tool generation remains active.'
                 : 'Tools were not saved.');
             toast.error('Failed to save or apply tools', { description: detail });
+            if (configSaved) await refetch();
         } finally {
             setSaving(false);
         }
@@ -312,6 +360,12 @@ const ToolsPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+    if (loadError) return (
+        <div role="alert" className="space-y-4 p-6">
+            <p>{loadError}</p>
+            <button type="button" onClick={() => fetchConfig(true)} className="px-3 py-2 rounded border border-border">Retry loading tools</button>
+        </div>
+    );
     if (yamlError) {
         return (
             <div className="space-y-4 p-6">
@@ -347,7 +401,7 @@ const ToolsPage = () => {
                     </div>
                     <button
                         onClick={handleApplyAIEngine}
-                        disabled={restartingEngine}
+                        disabled={restartingEngine || saving}
                         className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-orange-500 text-white hover:bg-orange-600 font-medium disabled:opacity-50"
                     >
                         {restartingEngine ? (
@@ -372,142 +426,73 @@ const ToolsPage = () => {
                     {applyStatus}
                 </div>
             )}
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Tools & Capabilities</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Configure the tools and capabilities available to the AI agent.
-                    </p>
+            <div hidden={!!selectedSection || httpEditing || activePhase === 'catalog'} className="space-y-6">
+                <div className="flex flex-wrap justify-between items-start gap-4">
+                    <div>
+                        <h1 className="text-3xl font-bold tracking-tight">Tools</h1>
+                        <p className="text-muted-foreground mt-1">Manage what your agents can do.</p>
+                    </div>
+                    <div className="flex gap-4 items-center">
+                        <button type="button" onClick={() => selectSection('defaults')} className="text-sm text-muted-foreground hover:text-foreground">Tool defaults</button>
+                        <button type="button" onClick={() => setActivePhase('catalog')} className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"><BookOpen className="h-4 w-4" /> Catalog</button>
+                    </div>
                 </div>
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
-                >
-                    <Save className="w-4 h-4 mr-2" />
-                    {saving ? 'Saving...' : 'Save & Apply'}
-                </button>
+                <div className="flex gap-6 border-b border-border" aria-label="Call phase">
+                    {(['pre_call', 'in_call', 'post_call'] as const).map(phase => (
+                        <button type="button" key={phase} aria-pressed={activePhase === phase} onClick={() => setActivePhase(phase)} className={`pb-3 text-sm border-b-2 ${activePhase === phase ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'}`}>
+                            {{ pre_call: 'Pre-Call', in_call: 'In-Call', post_call: 'Post-Call' }[phase]}
+                        </button>
+                    ))}
+                </div>
+                <div className="relative">
+                    <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <input aria-label="Search tools" placeholder="Search tools…" value={query} onChange={event => setQuery(event.target.value)} className="w-full rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm" />
+                </div>
+                {activePhase === 'in_call' && <ToolList config={config.tools || {}} query={query} onSelect={selectSection} />}
             </div>
 
-            {/* Phase Tabs */}
-            <div className="border-b border-border">
-                <div className="flex space-x-1">
-                    <button
-                        onClick={() => setActivePhase('pre_call')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'pre_call'
-                                ? 'border-primary text-primary'
-                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                            }`}
-                    >
-                        <Search className="w-4 h-4" />
-                        Pre-Call
-                    </button>
-                    <button
-                        onClick={() => setActivePhase('in_call')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'in_call'
-                                ? 'border-primary text-primary'
-                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                            }`}
-                    >
-                        <Phone className="w-4 h-4" />
-                        In-Call
-                    </button>
-                    <button
-                        onClick={() => setActivePhase('post_call')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'post_call'
-                                ? 'border-primary text-primary'
-                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                            }`}
-                    >
-                        <Webhook className="w-4 h-4" />
-                        Post-Call
-                    </button>
-                    <button
-                        onClick={() => setActivePhase('catalog')}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activePhase === 'catalog'
-                                ? 'border-primary text-primary'
-                                : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
-                            }`}
-                    >
-                        <BookOpen className="w-4 h-4" />
-                        Catalog
-                    </button>
-                </div>
+            <div hidden={!selectedSection}>
+                <button type="button" onClick={() => setSelectedSection(null)} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-5"><ArrowLeft className="h-4 w-4" /> Back to tools</button>
+                <h1 ref={headingRef} tabIndex={-1} className="text-2xl font-semibold tracking-tight">{selectedTool?.title}</h1>
+                <p className="text-sm text-muted-foreground mt-2 mb-6">{selectedTool?.description}. Agent access is managed in Agents.</p>
+                <fieldset disabled={saving} className="min-w-0">
+                    <ToolForm
+                        section={selectedSection ?? 'defaults'}
+                        config={{
+                            ...(config.tools || {}),
+                            farewell_hangup_delay_sec: config.farewell_hangup_delay_sec,
+                            on_provider_failure: config.on_provider_failure,
+                            provider_failure_prompt: config.provider_failure_prompt,
+                            provider_failure_redirect_context: config.provider_failure_redirect_context,
+                            provider_failure_redirect_extension: config.provider_failure_redirect_extension,
+                            provider_failure_redirect_priority: config.provider_failure_redirect_priority,
+                        }}
+                        contexts={config.contexts || {}}
+                        hangupUsage={hangupUsage}
+                        onChange={updateToolsConfig}
+                        onContextsChange={newContexts => setConfig((prev: any) => ({ ...prev, contexts: newContexts }))}
+                        onSaveNow={updateToolsConfigAndSaveNow}
+                    />
+                </fieldset>
             </div>
 
-            {/* Pre-Call Phase */}
-            {activePhase === 'pre_call' && (
-                <ConfigSection
-                    title="Pre-Call Tools"
-                    description="Tools that run before the AI speaks. Use for CRM lookups, caller enrichment, and context injection."
-                >
-                    <ConfigCard>
+            {(['pre_call', 'in_call', 'post_call'] as const).map(phase => (
+                <div key={phase} hidden={!!selectedSection || activePhase !== phase}>
+                    <fieldset disabled={saving} className="min-w-0">
                         <HTTPToolForm
-                            config={config.tools || {}}
-                            onChange={(newTools) => setConfig({ ...config, tools: newTools })}
-                            phase="pre_call"
+                            presentation="page"
+                            onEditingChange={setHttpEditing}
+                            query={query}
+                            config={(phase === 'in_call' ? config.in_call_tools : config.tools) || {}}
+                            onChange={newTools => setConfig((prev: any) => ({ ...prev, [phase === 'in_call' ? 'in_call_tools' : 'tools']: newTools }))}
+                            phase={phase}
                             contexts={config.contexts}
                         />
-                    </ConfigCard>
-                </ConfigSection>
-            )}
-
-            {/* In-Call Phase (existing tools + HTTP tools) */}
-            {activePhase === 'in_call' && (
-                <>
-                    <ConfigSection title="Built-in Tools" description="Core tools available during the conversation (transfer, hangup, email, etc.)">
-                        <ConfigCard>
-                            <ToolForm
-                                config={{
-                                    ...(config.tools || {}),
-                                    farewell_hangup_delay_sec: config.farewell_hangup_delay_sec,
-                                    on_provider_failure: config.on_provider_failure,
-                                    provider_failure_prompt: config.provider_failure_prompt,
-                                    provider_failure_redirect_context: config.provider_failure_redirect_context,
-                                    provider_failure_redirect_extension: config.provider_failure_redirect_extension,
-                                    provider_failure_redirect_priority: config.provider_failure_redirect_priority,
-                                }}
-                                contexts={config.contexts || {}}
-                                hangupUsage={hangupUsage}
-                                onChange={updateToolsConfig}
-                                onContextsChange={(newContexts) => setConfig((prev: any) => ({ ...prev, contexts: newContexts }))}
-                                onSaveNow={updateToolsConfigAndSaveNow}
-                            />
-                        </ConfigCard>
-                    </ConfigSection>
-                    <ConfigSection
-                        title="In-Call HTTP Tools"
-                        description="HTTP lookup tools the AI can invoke during conversation to fetch data (e.g., check availability, lookup order status)."
-                    >
-                        <ConfigCard>
-                            <HTTPToolForm
-                                config={config.in_call_tools || {}}
-                                onChange={(newTools) => setConfig({ ...config, in_call_tools: newTools })}
-                                phase="in_call"
-                                contexts={config.contexts}
-                            />
-                        </ConfigCard>
-                    </ConfigSection>
-                </>
-            )}
-
-            {/* Post-Call Phase */}
-            {activePhase === 'post_call' && (
-                <ConfigSection
-                    title="Post-Call Tools"
-                    description="Tools that run after the call ends. Use for webhooks, CRM updates, and integrations."
-                >
-                    <ConfigCard>
-                        <HTTPToolForm
-                            config={config.tools || {}}
-                            onChange={(newTools) => setConfig({ ...config, tools: newTools })}
-                            phase="post_call"
-                            contexts={config.contexts}
-                        />
-                    </ConfigCard>
-                </ConfigSection>
-            )}
-
+                    </fieldset>
+                </div>
+            ))}
+            {!selectedSection && !httpEditing && activePhase !== 'catalog' && <p className="text-xs text-muted-foreground">Configure tools here. Choose which tools each agent can use in Agents.</p>}
+            {activePhase === 'catalog' && <button type="button" onClick={() => setActivePhase('in_call')} className="inline-flex items-center gap-2 text-sm text-muted-foreground"><ArrowLeft className="h-4 w-4" /> Back to tools</button>}
             {activePhase === 'catalog' && (
                 <ConfigSection
                     title="Tool Catalog (Read-only)"
@@ -667,6 +652,15 @@ const ToolsPage = () => {
                         </div>
                     </ConfigCard>
                 </ConfigSection>
+            )}
+            {(dirty || selectedSection || applyStatus) && activePhase !== 'catalog' && !httpEditing && (
+                <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-background py-4" role="region" aria-label="Save tool changes">
+                    <span className="text-sm text-muted-foreground" role="status">{saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Save checks whether a reload or restart is needed.'}</span>
+                    {/* Keep Save available for fields that commit their local draft on blur. */}
+                    <button type="button" onClick={handleSave} disabled={saving || restartingEngine} className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">
+                        <Save className="h-4 w-4" /> {saving ? 'Saving…' : 'Save & Apply'}
+                    </button>
+                </div>
             )}
         </div>
     );

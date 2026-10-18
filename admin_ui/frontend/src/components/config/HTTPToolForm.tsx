@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
@@ -18,13 +18,16 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
-import { Modal } from '../ui/Modal';
+import { ToolEditorSurface } from './ToolEditorSurface';
 
 const BODY_CAPABLE_HTTP_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const isBodyCapableHTTPMethod = (method?: string) =>
     BODY_CAPABLE_HTTP_METHODS.includes((method || '').toUpperCase());
 
 interface HTTPToolFormProps {
+    presentation?: 'modal' | 'page';
+    onEditingChange?: (editing: boolean) => void;
+    query?: string;
     config: any;
     onChange: (newConfig: any) => void;
     phase: 'pre_call' | 'in_call' | 'post_call';
@@ -130,7 +133,8 @@ const editorSmallInputClass =
 const editorTextareaClass =
     'w-full rounded-md border border-input bg-background p-3 text-sm text-foreground caret-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
 
-const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) => {
+const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal', onEditingChange, query = '' }: HTTPToolFormProps) => {
+    const addToolButtonRef = useRef<HTMLButtonElement>(null);
     const { confirm } = useConfirmDialog();
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
@@ -634,10 +638,15 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
     };
 
     const phaseConfig = getPhaseConfig();
+    useEffect(() => { onEditingChange?.(!!editingTool); }, [editingTool, onEditingChange]);
+    const filteredTools = Object.entries(httpTools).filter(([key, tool]) =>
+        `${key} ${tool.description || ''} ${tool.url || ''}`.toLowerCase().includes(query.trim().toLowerCase())
+    );
 
     return (
         <div className="space-y-4">
-            <div className="flex justify-between items-center">
+            <div hidden={presentation === 'page' && !!editingTool}>
+            <div className="flex flex-wrap gap-3 justify-between items-center">
                 <div>
                     <h4 className="text-md font-medium flex items-center gap-2">
                         {phaseConfig.icon} {phaseConfig.title}
@@ -645,6 +654,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
                     <p className="text-xs text-muted-foreground mt-1">{phaseConfig.desc}</p>
                 </div>
                 <button
+                    ref={addToolButtonRef}
                     onClick={handleAddTool}
                     className="text-xs flex items-center bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 transition-colors"
                 >
@@ -658,18 +668,19 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
                 </div>
             ) : (
                 <div className="space-y-2">
-                    {Object.entries(httpTools).map(([key, tool]) => (
+                    {filteredTools.map(([key, tool]) => (
                         <div
                             key={key}
-                            className="flex items-center justify-between p-3 bg-accent/30 rounded border border-border/50"
+                            className="flex items-center justify-between gap-3 py-4 border-b border-border"
                         >
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
                                 <div
                                     className={`w-2 h-2 rounded-full ${tool.enabled ? 'bg-green-500' : 'bg-gray-400'}`}
                                 />
                                 <div>
-                                    <div className="font-medium text-sm flex items-center gap-2">
+                                    <div className="font-medium text-sm flex flex-wrap items-center gap-2 break-all">
                                         {key}
+                                        <span className="text-xs font-normal text-muted-foreground">{tool.enabled ? 'Enabled' : 'Disabled'}</span>
                                         {tool.is_global && (
                                             <span className="text-xs bg-blue-500/20 text-blue-600 px-1.5 py-0.5 rounded flex items-center gap-1">
                                                 <Lock className="w-3 h-3" /> Global
@@ -689,12 +700,13 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
                             <div className="flex items-center gap-1">
                                 <button
                                     onClick={() => handleEditTool(key, tool)}
-                                    aria-label={`Edit ${key}`}
+                                    aria-label={presentation === 'page' ? `Configure ${key}` : `Edit ${key}`}
                                     className="p-1.5 hover:bg-background rounded text-muted-foreground hover:text-foreground"
                                 >
-                                    <Settings className="w-4 h-4" />
+                                    {presentation === 'page' ? 'Configure' : <Settings className="w-4 h-4" />}
                                 </button>
                                 <button
+                                    aria-label={`Delete ${key}`}
                                     onClick={() => handleDeleteTool(key)}
                                     className="p-1.5 hover:bg-destructive/10 rounded text-destructive"
                                 >
@@ -706,7 +718,11 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
                 </div>
             )}
 
-            <Modal
+            {filteredTools.length === 0 && Object.keys(httpTools).length > 0 && <p className="text-sm text-muted-foreground py-4">No HTTP tools match this search.</p>}
+            </div>
+            <ToolEditorSurface
+                inline={presentation === 'page'}
+                fallbackFocusRef={addToolButtonRef}
                 isOpen={!!editingTool}
                 onClose={closeEditor}
                 size="xl"
@@ -740,7 +756,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
                             onClick={handleSaveTool}
                             className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
                         >
-                            Save
+                            {presentation === 'page' ? 'Update tool' : 'Save'}
                         </button>
                     </>
                 }
@@ -1927,7 +1943,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts }: HTTPToolFormProps) 
                         </>
                     )}
                 </div>
-            </Modal>
+            </ToolEditorSurface>
         </div>
     );
 };

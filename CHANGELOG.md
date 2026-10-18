@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Tools configuration:** replace the expanded built-in settings page with a
+  searchable tool list and dedicated editors. Keep call-phase navigation,
+  shared tool defaults, a read-only runtime catalog, and all existing settings.
+  HTTP editors explicitly stage changes with **Update tool** before the page's
+  **Save & Apply** action. Transfer routing/timing settings use a disclosure.
+
 ### Fixed
+
+- **Tools save/apply and navigation:** preserve drafts and calendar connection
+  state while moving between editors; merge background calendar results into the
+  latest draft, including Microsoft timezone/calendar fallback values edited
+  during sign-in. Keep blur-committed fields in saves, block editing after a failed
+  configuration load, and distinguish failed/partial reloads from full application.
+  Restore keyboard focus after HTTP editing and match accessible action names
+  to the visible Configure labels.
 
 - **Deferred transfer announcements (#743):** optional global and per-target
   announcement waiting across all full-agent providers and modular pipelines.
