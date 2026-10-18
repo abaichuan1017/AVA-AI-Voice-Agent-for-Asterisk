@@ -5,6 +5,19 @@ import math
 from typing import Any
 
 
+def normalize_local_handoff_providers(raw: Any) -> set[str]:
+    """Preserve legacy provider-list coercion for both speech-owner decisions."""
+    if raw is False or raw is None:
+        return set()
+    if raw is True:
+        raw = ["deepgram"]
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, (list, tuple, set)):
+        raw = ["deepgram"]
+    return {str(item or "").strip().lower() for item in raw if str(item or "").strip()}
+
+
 def validate_handoff_config(tools: dict) -> None:
     if not isinstance(tools, dict):
         return

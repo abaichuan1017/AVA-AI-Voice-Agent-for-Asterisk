@@ -55,7 +55,7 @@ async def store_pending_deferred_transfer(
     action: Dict[str, Any],
 ) -> None:
     session = await context.get_session()
-    from src.tools.handoff_config import resolve_handoff
+    from src.tools.handoff_config import resolve_handoff, normalize_local_handoff_providers
     from src.config.provider_instances import provider_kind
     transfer = context.get_config_value("tools.transfer") or {}
     destination = (transfer.get("destinations") or {}).get(action.get("destination_key")) or {}
@@ -70,11 +70,7 @@ async def store_pending_deferred_transfer(
                 handoff["message"] = f"{handoff['message']} {prompt}"
         key = getattr(context, "provider_name", None) or ""
         kind = provider_kind(key, (context.get_config_value("providers") or {}).get(key) or {}) or key
-        local = transfer.get("local_handoff_audio_providers", ["deepgram"])
-        if local is True:
-            local = ["deepgram"]
-        if isinstance(local, str):
-            local = [part.strip() for part in local.split(",")]
+        local = normalize_local_handoff_providers(transfer.get("local_handoff_audio_providers", ["deepgram"]))
         handoff["owner"] = "engine" if local and kind in local and not session.pipeline_name else "provider"
         action["handoff"] = handoff
     session.pending_deferred_transfer = dict(action)

@@ -21,6 +21,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = structlog.get_logger(__name__)
 
+_CANCEL_STOP_ATTEMPTS = 5
+_CANCEL_RETRY_DELAY = 0.1
+
 
 class PlaybackManager:
     """
@@ -231,11 +234,17 @@ class PlaybackManager:
         ref.cancel_cleanup_pending = True
 
         async def retry_stop():
-            delay = 0.1
-            while True:
+            delay = _CANCEL_RETRY_DELAY
+            for _attempt in range(_CANCEL_STOP_ATTEMPTS):
                 await asyncio.sleep(delay)
                 current = await self.session_store.get_playback(playback_id)
+                session = await self.session_store.get_by_call_id(call_id)
                 if not current or current.call_id != call_id:
+                    return
+                if not session:
+                    await self.discard_terminal_playbacks(call_id)
+                    return
+                if session.cleanup_in_progress or session.cleanup_completed:
                     return
                 try:
                     stopped = bool(await asyncio.wait_for(self.ari_client.stop_playback(playback_id), 1.0))
@@ -245,6 +254,28 @@ class PlaybackManager:
                     await self.on_playback_finished(playback_id)
                     return
                 delay = min(delay * 2, 5.0)
+            session = await self.session_store.get_by_call_id(call_id)
+            if not session or session.cleanup_in_progress or session.cleanup_completed:
+                return
+            # Retry exhaustion is a terminal call failure, not evidence that
+            # the remote playback completed. Close the AI context fail-closed
+            # and use the engine's existing telephony-ownership cleanup rules.
+            session.call_outcome = "failed"
+            session.cleanup_in_progress = True
+            session.audio_capture_enabled = False
+            await self.session_store.upsert_call(session)
+            logger.error("Cancelled playback stop retries exhausted; closing AI call", call_id=call_id, playback_id=playback_id)
+            engine = getattr(self.ari_client, "engine", None)
+            cleanup = getattr(engine, "_cleanup_call", None)
+            try:
+                if callable(cleanup):
+                    await cleanup(call_id)
+                else:
+                    logger.critical("Engine lifecycle unavailable during terminal playback recovery", call_id=call_id)
+                    await self.discard_terminal_playbacks(call_id)
+                    await self.session_store.remove_call(call_id)
+            finally:
+                await self.discard_terminal_playbacks(call_id)
 
         engine = getattr(self.ari_client, "engine", None)
         schedule = getattr(engine, "_fire_and_forget_for_call", None)
@@ -252,6 +283,21 @@ class PlaybackManager:
             schedule(call_id, retry_stop(), name=f"cancelled-playback-{playback_id}")
         else:
             asyncio.create_task(retry_stop(), name=f"cancelled-playback-{playback_id}")
+
+    async def discard_terminal_playbacks(self, call_id: str) -> None:
+        """Release local resources as a call closes, without claiming remote completion."""
+        for playback_id in await self.session_store.list_playbacks_for_call(call_id):
+            ref = await self.session_store.pop_playback(playback_id)
+            if ref is None:
+                continue
+            if self.conversation_coordinator:
+                await self.conversation_coordinator.cancel_tts(call_id, playback_id)
+            else:
+                await self.session_store.clear_gating_token(call_id, playback_id)
+            await self._cleanup_audio_file(ref.audio_file)
+        session = await self.session_store.get_by_call_id(call_id)
+        if session:
+            session.audio_capture_enabled = False
 
     async def on_playback_finished(self, playback_id: str) -> bool:
         """

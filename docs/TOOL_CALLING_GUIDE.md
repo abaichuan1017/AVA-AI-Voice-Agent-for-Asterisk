@@ -1283,14 +1283,20 @@ partial audio segments, and interrupted responses do not establish completion.
 ElevenLabs deployments should enable authoritative `agent_response_complete`
 events; without one the bounded timeout remains available.
 
+Speech ownership and playback selection use the same normalization of
+`local_handoff_audio_providers`, preserving case-insensitive provider names,
+comma-separated strings, lists and legacy boolean handling. This prevents
+configuration spellings from assigning both a provider and local speech owner.
 Deepgram's configured local handoff and modular pipeline handoffs have one TTS
 owner and use the resolved announcement directly. Pipeline synthesis, playback
 startup and completion share the finish budget; configured engine-owned local
 playback startup is also bounded. If startup is cancelled, its exact playback
 reference and capture gate are cleared after a confirmed stop. An uncertain stop
-retains an exact-playback retry owner until stop is confirmed or call cleanup
-removes the playback, including after transfer cancellation/replacement. Elapsed
-gating timers cannot release that uncertain output. An attended caller-recording
+retains an exact-playback retry owner across transfer cancellation/replacement.
+Each stop request is bounded to one second; after five retry attempts, the AI
+call enters the existing terminal cleanup lifecycle. Local refs, files and gates
+are retired as the call closes, without claiming that an unconfirmed remote
+playback finished. Elapsed gating timers cannot release uncertain output. An attended caller-recording
 transfer retains its name/reason instruction after the configured sentence.
 
 After readiness or timeout, later provider responses are suppressed and the

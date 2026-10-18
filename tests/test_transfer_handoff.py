@@ -715,14 +715,18 @@ async def test_pipeline_startup_deadline_cleans_exact_playback_or_retains_uncert
         assert state.cancelled if cancel else state.sealed
 
 
-@pytest.mark.parametrize("local_enabled", [True, False])
-async def test_deepgram_announcement_selects_one_speech_owner(monkeypatch, local_enabled):
+@pytest.mark.parametrize("local_setting,local_enabled", [
+    (True, True), (False, False), (None, False), (["deepgram"], True),
+    ([" DeepGram "], True), ("DeepGram, google_live", True), ([], False), ("", False), (42, True),
+])
+async def test_deepgram_announcement_selects_one_speech_owner(monkeypatch, local_setting, local_enabled):
     from src.tools.telephony.deferred_transfer import store_pending_deferred_transfer
     engine = _build_engine()
     session = await _armed_session(engine, "deepgram-owner")
     session.provider_name = "deepgram"
     action = session.pending_deferred_transfer
-    transfer = {"handoff": {"enabled": True, **CFG}, "local_handoff_audio_providers": ["deepgram"] if local_enabled else []}
+    transfer = {"handoff": {"enabled": True, **CFG}, "local_handoff_audio_providers": local_setting}
+    monkeypatch.setattr(engine, "_tool_config_for_session", lambda target: {"tools": {"transfer": transfer}})
     values = {"tools.transfer": transfer, "providers": {"deepgram": {"type": "deepgram"}}}
     context = SimpleNamespace(call_id=session.call_id, provider_name="deepgram", get_session=AsyncMock(return_value=session),
                               get_config_value=lambda key: values.get(key), session_store=engine.session_store)
@@ -739,7 +743,6 @@ async def test_deepgram_announcement_selects_one_speech_owner(monkeypatch, local
         await asyncio.gather(*list(engine._call_bg_tasks.get(session.call_id, ())))
     else:
         assert result.get("ai_should_speak", True)
-        monkeypatch.setattr(engine, "_deferred_transfer_local_handoff_providers", lambda target: set())
         synth = AsyncMock()
         monkeypatch.setattr(engine, "_local_ai_server_tts", synth)
         assert not await engine._play_deferred_transfer_local_handoff(session.call_id, session)
@@ -799,3 +802,60 @@ async def test_superseded_action_stops_only_its_late_startup_playback(monkeypatc
     stop.assert_awaited_once_with(session.call_id, "old-playback")
     wait.assert_not_awaited()
     assert session.pending_deferred_transfer["id"] == "replacement"
+
+
+@pytest.mark.parametrize("provider_kind", ["google_live", "openai_realtime", "grok", "deepgram", "elevenlabs_agent", "local"])
+async def test_action_and_playback_agree_on_legacy_provider_list_normalization(monkeypatch, provider_kind):
+    from src.tools.telephony.deferred_transfer import store_pending_deferred_transfer
+    engine = _build_engine()
+    session = await _armed_session(engine, "normalized-owner")
+    session.provider_name = provider_kind
+    transfer = {"handoff": {"enabled": True, **CFG}, "local_handoff_audio_providers": " " + provider_kind.upper() + ", other "}
+    values = {"tools.transfer": transfer, "providers": {provider_kind: {"type": provider_kind}}}
+    monkeypatch.setattr(engine, "_tool_config_for_session", lambda target: {"tools": {"transfer": transfer}})
+    context = SimpleNamespace(call_id=session.call_id, provider_name=provider_kind, get_session=AsyncMock(return_value=session),
+                              get_config_value=lambda key: values.get(key), session_store=engine.session_store)
+    action = session.pending_deferred_transfer
+    await store_pending_deferred_transfer(context, action)
+    assert provider_kind in engine._deferred_transfer_local_handoff_providers(session)
+    assert action["handoff"]["owner"] == "engine"
+
+
+@pytest.mark.parametrize("raises", [False, True])
+async def test_cancelled_playback_retry_exhaustion_uses_terminal_cleanup_without_false_finish(monkeypatch, tmp_path, raises):
+    import src.core.playback_manager as playback_module
+    from src.core.models import PlaybackRef
+    engine = _build_engine()
+    session = await _armed_session(engine, "retry-exhausted-" + str(raises))
+    session.pending_deferred_transfer = None
+    other = await _armed_session(engine, "retry-other-" + str(raises))
+    path, other_path = tmp_path / "old.ulaw", tmp_path / "other.ulaw"
+    path.write_bytes(b"audio")
+    other_path.write_bytes(b"other")
+    for target, pid, file in [(session, "old-playback", path), (other, "other-playback", other_path)]:
+        await engine.session_store.add_playback(PlaybackRef(pid, target.call_id, target.caller_channel_id, None, "sound:test", str(file)))
+        await engine.session_store.set_gating_token(target.call_id, pid)
+    monkeypatch.setattr(playback_module, "_CANCEL_RETRY_DELAY", 0.001)
+    stop = AsyncMock(side_effect=RuntimeError("ARI failed")) if raises else AsyncMock(return_value=False)
+    monkeypatch.setattr(engine.ari_client, "stop_playback", stop)
+    hangup = AsyncMock(return_value=True)
+    monkeypatch.setattr(engine.ari_client, "hangup_channel", hangup)
+    monkeypatch.setattr(engine, "_persist_call_history", AsyncMock())
+    monkeypatch.setattr(engine, "_execute_post_call_tools", AsyncMock())
+    finish = AsyncMock()
+    monkeypatch.setattr(engine.playback_manager, "on_playback_finished", finish)
+    cleanup = AsyncMock(wraps=engine._cleanup_call)
+    monkeypatch.setattr(engine, "_cleanup_call", cleanup)
+    await engine.playback_manager.retain_cancelled_playback(session.call_id, "old-playback")
+    await asyncio.wait_for(asyncio.gather(*list(engine._call_bg_tasks.get(session.call_id, ()))), 2)
+    assert stop.await_count == playback_module._CANCEL_STOP_ATTEMPTS
+    cleanup.assert_awaited_once_with(session.call_id)
+    finish.assert_not_awaited()
+    assert await engine.session_store.get_by_call_id(session.call_id) is None
+    assert await engine.session_store.get_playback("old-playback") is None
+    assert not session.tts_tokens and not session.audio_capture_enabled and not path.exists()
+    assert await engine.session_store.get_playback("other-playback") is not None
+    assert "other-playback" in other.tts_tokens and other_path.exists()
+    assert other.pending_deferred_transfer is not None
+    hangup.assert_awaited_once_with(session.caller_channel_id)
+    await engine.playback_manager.discard_terminal_playbacks(other.call_id)

@@ -10376,8 +10376,9 @@ class Engine:
             except Exception:
                 logger.debug("Terminal lifecycle cleanup failed", call_id=call_id, exc_info=True)
             bg_tasks = self._call_bg_tasks.pop(call_id, set())
+            cleanup_task = asyncio.current_task()
             for t in bg_tasks:
-                if not t.done():
+                if t is not cleanup_task and not t.done():
                     t.cancel()
 
             # Stop the active provider session if one exists (per-call instance).
@@ -10726,6 +10727,9 @@ class Engine:
             # Clean up call start time after post-call tools have used it
             _call_start_times.pop(call_id, None)
 
+            # Terminal cleanup retires local playback refs/gates without
+            # misreporting an unconfirmed remote stop as PlaybackFinished.
+            await self.playback_manager.discard_terminal_playbacks(call_id)
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
 
@@ -22694,16 +22698,8 @@ class Engine:
         if not isinstance(transfer_cfg, dict):
             transfer_cfg = {}
 
-        raw = transfer_cfg.get("local_handoff_audio_providers", ["deepgram"])
-        if raw is False or raw is None:
-            return set()
-        if raw is True:
-            raw = ["deepgram"]
-        if isinstance(raw, str):
-            raw = [item.strip() for item in raw.split(",")]
-        if not isinstance(raw, (list, tuple, set)):
-            raw = ["deepgram"]
-        return {str(item or "").strip().lower() for item in raw if str(item or "").strip()}
+        from src.tools.handoff_config import normalize_local_handoff_providers
+        return normalize_local_handoff_providers(transfer_cfg.get("local_handoff_audio_providers", ["deepgram"]))
 
     async def _play_deferred_transfer_local_handoff(self, call_id: str, session: "CallSession") -> bool:
         provider_name = str(getattr(session, "provider_name", None) or getattr(self.config, "default_provider", "") or "").strip()
