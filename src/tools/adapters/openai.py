@@ -320,7 +320,38 @@ class OpenAIToolAdapter:
             
             # If tool has a message and AI should speak, add direct instruction to speak it
             # Instructions work in both GA and Beta modes
-            if tool_message:
+            if function_name == "microsoft_calendar":
+                # Calendar results describe state and recoverable errors, not a script
+                # to read aloud. Keep data in function_call_output, out of instructions.
+                response_config["instructions"] = (
+                    "Continue using the latest structured microsoft_calendar result and the business instructions. "
+                    "Do not read internal error codes, validation messages, agent hints or parameter names aloud. "
+                    "For a malformed read-only request, correct your own arguments once without asking the caller "
+                    "to solve the technical error or changing their requested date or duration. "
+                    "A tool error does not mean a slot is busy. Ask only for genuinely missing caller information. "
+                    "Before creation, resolve the invitation email choice and obtain the required confirmations. "
+                    "Never claim creation, cancellation or invitation success unless the result verifies it; "
+                    "do not claim email delivery. Respect uncertain outcomes and same-call ownership guards. "
+                    "A Teams meeting is ready only with meeting_status=ready and teams_join_url; "
+                    "link and outlook_web_link are Outlook links. Respect changes_require_staff. "
+                    "Use reschedule_event for time-only changes. Replace a booking only after caller-confirmed "
+                    "cancellation returns reservation_status=cancelled, then recheck and confirm replacement details. "
+                    "Keep the next spoken response brief and useful; do not repeat a closing offer while a problem is unresolved."
+                )
+            elif function_name == "update_call_metadata":
+                # Bookkeeping acknowledgements are internal, but response.create
+                # must still run so the model can chain tools or answer the caller.
+                response_config["instructions"] = (
+                    "Continue the conversation using the business instructions and latest tool result. "
+                    "Treat update_call_metadata as silent internal bookkeeping. "
+                    "Do not read or paraphrase its acknowledgement, validation message, field names, "
+                    "source labels or stored values aloud, and do not announce that information was saved or updated. "
+                    "Complete any remaining required metadata or source updates silently using the tools, "
+                    "then address the caller's latest request naturally. "
+                    "If the update failed, do not claim it succeeded or repeatedly retry it; "
+                    "continue helping the caller without exposing the technical error."
+                )
+            elif tool_message:
                 # Use direct instruction format like greeting: "Please say: {text}"
                 response_config["instructions"] = f"Please say the following to the user: {tool_message}"
                 logger.info(

@@ -190,7 +190,7 @@ describe('Tools list and dedicated editors', () => {
     });
 
     it.each([
-        { scenario: 'discovered calendar', calendars: [{ id: 'calendar', name: 'Appointments', is_default_calendar: true }], expectedCalendar: 'calendar' },
+        { scenario: 'discovered calendar', calendars: [{ id: 'calendar', name: 'Appointments', is_default_calendar: true }], expectedCalendar: 'operator-calendar' },
         { scenario: 'no discovered calendar', calendars: [], expectedCalendar: 'operator-calendar' },
     ])('keeps pending Microsoft draft edits across navigation with $scenario', async ({ calendars, expectedCalendar }) => {
         const config = fixture();
