@@ -26,12 +26,12 @@ was replayed to an external model. Source baseline: `origin/main` at `b8104904`.
 | Target | Result |
 | --- | --- |
 | Unmodified main calendar/Graph baseline | 140 passed |
-| Feature engine/tool/provider/history/metadata regression selection | 296 passed |
+| Feature engine/tool/provider/history/metadata regression selection (review fixes) | 313 passed |
 | Admin config, managed-tools and Microsoft upgrade tests | 158 passed |
 | Complete frontend suite | 471 passed across 66 files |
 | Frontend lint/build | Passed; existing repository warning budget retained |
 | Local browser fixture | Passed Teams switch, verification, settings reopen, stale-result clearing; no page errors |
-| Older deployment candidate engine/tool selection | 198 passed, 16 main-only cases excluded |
+| Older deployment candidate engine/tool selection (review fixes) | 215 passed, 16 main-only cases excluded |
 | Older deployment candidate calendar verification | 10 passed, 6 newer identity/cache cases excluded |
 | Older deployment candidate frontend selection/build | 15 passed; build passed using its existing lockfile |
 
@@ -54,6 +54,12 @@ actual Linux runtime imports still require deployment-stage verification.
 - Unsupported/missing/forbidden/read-only calendars and disabled Teams mode.
 - Distinct Teams/Outlook links and filtered internal fields.
 - Same-event time changes preserving generated HTML, join metadata and attendees.
+- Equivalent Graph HTML serialization after PATCH or a lost response, adopting the
+  observed body for later moves/cancellation while rejecting changed details,
+  Microsoft content, link targets, metadata, attendees, subject and time.
+- Incomplete PATCH responses verified by one read; a failed verification read
+  retains the pending write. Unicode separators use HTMLParser-compatible LF
+  offsets so the outgoing body replaces all old AVA details precisely.
 - Changed bodies, time, attendees, providers, join URLs, moved events and recurring-event refusal.
 - ETag failures, rejected writes, cancellation verification and forbidden reads
   after uncertain cancellation.

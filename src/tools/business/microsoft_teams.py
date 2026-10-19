@@ -61,7 +61,10 @@ class _DetailsParser(HTMLParser):
     def __init__(self, content):
         super().__init__(convert_charrefs=False)
         self.content = content
-        self.lines = content.splitlines(keepends=True)
+        # HTMLParser's line counter advances on LF only (not Unicode separators).
+        self.line_starts = [0] + [
+            i + 1 for i, char in enumerate(content) if char == "\n"
+        ]
         self.depth = 0
         self.start = None
         self.spans = []
@@ -69,7 +72,7 @@ class _DetailsParser(HTMLParser):
 
     def source_offset(self):
         line, column = self.getpos()
-        return sum(len(part) for part in self.lines[: line - 1]) + column
+        return self.line_starts[line - 1] + column
 
     def handle_starttag(self, tag, attrs):
         if tag != "div":
@@ -89,7 +92,7 @@ class _DetailsParser(HTMLParser):
                 self.spans.append((self.start, self.source_offset()))
 
 
-def replace_details(body: dict, text: str) -> dict:
+def _details_region(body: dict) -> tuple[str, int, int]:
     content = body.get("content")
     if str(body.get("contentType", "")).lower() != "html" or not isinstance(
         content, str
@@ -112,10 +115,136 @@ def replace_details(body: dict, text: str) -> dict:
             "booking_changed",
             "Cannot identify the Teams details container safely; ask staff.",
         )
+    return content, start, end
+
+
+def replace_details(body: dict, text: str) -> dict:
+    content, start, end = _details_region(body)
     return {
         "contentType": body["contentType"],
         "content": content[:start] + details_html(text) + content[end:],
     }
+
+
+class _EquivalentHTML(HTMLParser):
+    """Conservative serialization fingerprint; never used for pre-write approval."""
+
+    def __init__(self, *, details=False):
+        super().__init__(convert_charrefs=True)
+        self.details = details
+        self.tokens = []
+        self.invalid = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs = sorted((key, value or "") for key, value in attrs)
+        # Graph can add presentational wrappers to AVA's plain text. Only the
+        # narrow font-family style is ignored; links, hidden text, etc. fail closed.
+        presentation = all(
+            key == "style"
+            and all(
+                rule.strip().lower().startswith("font-family:")
+                for rule in value.split(";")
+                if rule.strip()
+            )
+            for key, value in attrs
+        )
+        if self.details:
+            if tag == "span" and presentation:
+                return
+            if tag == "br" and not attrs:
+                self.handle_data(" ")
+                return
+            self.invalid = True
+        elif tag == "div" and ("id", DETAILS_ID) in attrs:
+            extra = [(key, value) for key, value in attrs if key != "id"]
+            if extra:
+                check = _EquivalentHTML(details=True)
+                check.handle_starttag("span", extra)
+                if check.invalid:
+                    self.invalid = True
+            attrs = [("id", DETAILS_ID)]
+        self.tokens.append(("start", tag, tuple(attrs)))
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in {"br", "hr", "img", "meta", "link", "input", "wbr"}:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        if self.details and tag == "span":
+            return
+        self.tokens.append(("end", tag))
+
+    def handle_data(self, data):
+        if self.details:
+            # Keep text across span boundaries contiguous; entities are decoded
+            # by HTMLParser. Plain details use whitespace only for layout.
+            self.tokens.append(data)
+        elif data.strip():
+            self.tokens.append(("text", " ".join(data.split())))
+
+    def handle_comment(self, data):
+        self.tokens.append(("comment", data))
+
+    def handle_decl(self, decl):
+        self.tokens.append(("decl", decl.lower()))
+
+
+def _html_fingerprint(content: str, *, details=False):
+    parser = _EquivalentHTML(details=details)
+    parser.feed(content)
+    parser.close()
+    if parser.invalid or (
+        details and any(not isinstance(t, str) for t in parser.tokens)
+    ):
+        return None
+    return " ".join("".join(parser.tokens).split()) if details else parser.tokens
+
+
+def _nonempty_metadata(value):
+    if isinstance(value, dict):
+        return {
+            k: v
+            for k, item in value.items()
+            if (v := _nonempty_metadata(item)) not in (None, "", [], {})
+        }
+    if isinstance(value, list):
+        return [_nonempty_metadata(item) for item in value]
+    return value
+
+
+def pending_update_matches(event: dict, expected: dict) -> bool:
+    """Accept harmless Graph serialization only for a known conditional PATCH.
+
+    Preserve the join metadata and Microsoft's HTML outside AVA's details, then
+    adopt the observed representation as the next exact pre-write baseline.
+    """
+    actual = meeting_snapshot(event)
+    if (
+        actual["is_online_meeting"] is not True
+        or actual["provider"] != "teamsForBusiness"
+        or not join_url(event)
+        or _nonempty_metadata({k: v for k, v in actual.items() if k != "body"})
+        != _nonempty_metadata({k: v for k, v in expected.items() if k != "body"})
+    ):
+        return False
+    try:
+        actual_content, a, b = _details_region(actual["body"])
+        expected_content, c, d = _details_region(expected["body"])
+        actual_details = _html_fingerprint(actual_content[a:b], details=True)
+        expected_details = _html_fingerprint(expected_content[c:d], details=True)
+        actual_outside = _html_fingerprint(actual_content[:a] + actual_content[b:])
+        expected_outside = _html_fingerprint(
+            expected_content[:c] + expected_content[d:]
+        )
+        return (
+            actual_details is not None
+            and actual_details == expected_details
+            and actual_outside is not None
+            and actual_outside == expected_outside
+        )
+    except (BookingValidationError, TypeError, ValueError):
+        return False
 
 
 def join_url(event: dict) -> str | None:

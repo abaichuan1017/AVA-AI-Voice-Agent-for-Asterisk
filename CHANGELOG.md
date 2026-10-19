@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Teams rescheduling:** tolerate equivalent Graph HTML serialization after a
+  conditional update and retain the observed body as the next baseline. Match
+  HTML parser offsets using LF only so Unicode separators cannot retain stale
+  booking details or overwrite Microsoft meeting content.
+
 - **Calendar booking lifecycle:** support confirmed cancellation/replacement with
   fresh transaction generations, verify cancellation before replacement, and keep
   uncertain mutations blocked when reconciliation reads fail. Preserve structured

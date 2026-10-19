@@ -240,7 +240,12 @@ container. Microsoft adds its meeting content. AVA retains the returned body and
 meeting metadata in call-local ownership state. Rescheduling compares them with
 a fresh HTML read, updates only the AVA details container, preserves every byte
 outside it, and sends the observed ETag with the PATCH. Attendees and meeting
-metadata are omitted from the PATCH. If Exchange removes the recognizable
+metadata are omitted from the PATCH. A known pending update tolerates equivalent
+HTML serialization (tag/attribute formatting, entities and limited font wrappers)
+while checking the expected details, time, subject, attendees and join metadata.
+The validated PATCH response, or one verifying HTML read, becomes the next exact
+body baseline; a lost response is reconciled without repeating the write.
+If Exchange removes the recognizable
 container, or external edits change the stored body/join details, staff must
 handle the booking rather than AVA rewriting unknown content.
 

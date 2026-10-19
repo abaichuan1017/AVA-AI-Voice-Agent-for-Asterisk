@@ -52,6 +52,7 @@ from src.tools.business.microsoft_teams import (
     require_teams_calendar,
     join_url,
     meeting_snapshot,
+    pending_update_matches,
     replace_details,
 )
 
@@ -1005,6 +1006,34 @@ class MicrosoftCalendarTool(Tool):
                 pass
         return None
 
+    def _matches_teams_update(self, event, tracked, account):
+        """Validate the complete observed update before adopting its HTML baseline."""
+        if (
+            not isinstance(event, dict)
+            or event.get("id") != tracked.get("event_id")
+            or event.get("isCancelled")
+            or event.get("type", "singleInstance") != "singleInstance"
+            or event.get("isOrganizer") is not True
+            or event.get("subject") != tracked.get("pending_subject")
+        ):
+            return False
+        start = self._parse_event_dt(event.get("start") or {}, account.timezone)
+        end = self._parse_event_dt(event.get("end") or {}, account.timezone)
+        if (
+            not start
+            or not end
+            or [to_utc(start).isoformat(), to_utc(end).isoformat()]
+            != tracked.get("pending_target")
+        ):
+            return False
+        emails = sorted(
+            str((item.get("emailAddress") or {}).get("address") or "").casefold()
+            for item in event.get("attendees") or []
+        )
+        return emails == sorted(
+            email.casefold() for email in tracked.get("attendees", [])
+        ) and pending_update_matches(event, tracked.get("pending_teams_snapshot") or {})
+
     def _uncertain(self, operation):
         return {
             "status": "error",
@@ -1554,11 +1583,12 @@ class MicrosoftCalendarTool(Tool):
                             "staff_assistance_required",
                             "A trusted Teams creation response is unavailable; ask staff to verify this booking before changing it.",
                         )
-                    if meeting_snapshot(event) != (
-                        pending_baseline
+                    snapshot_matches = (
+                        pending_update_matches(event, pending_baseline)
                         if matches_pending and pending_baseline
-                        else baseline
-                    ):
+                        else meeting_snapshot(event) == baseline
+                    )
+                    if not snapshot_matches:
                         raise BookingValidationError(
                             "booking_changed",
                             "The Teams body or join information changed in Outlook; ask staff to handle it safely.",
@@ -1696,8 +1726,11 @@ class MicrosoftCalendarTool(Tool):
                         pending_body=None,
                         subject=tracked.get("pending_subject")
                         or tracked.get("subject"),
-                        teams_snapshot=tracked.get("pending_teams_snapshot")
-                        or tracked.get("teams_snapshot"),
+                        teams_snapshot=(
+                            meeting_snapshot(event)
+                            if tracked.get("teams")
+                            else tracked.get("teams_snapshot")
+                        ),
                         pending_teams_snapshot=None,
                         pending_subject=None,
                         start_utc=target[0],
@@ -1777,10 +1810,16 @@ class MicrosoftCalendarTool(Tool):
                 )
                 if not isinstance(updated, dict) or updated.get("id") != event_id:
                     return self._uncertain("rescheduling")
-                if tracked.get("teams") and meeting_snapshot(updated) != tracked.get(
-                    "pending_teams_snapshot"
-                ):
-                    return self._uncertain("rescheduling")
+                if tracked.get("teams"):
+                    if not self._matches_teams_update(updated, tracked, account):
+                        # An incomplete PATCH response is not another write. Read
+                        # once to verify the applied state before confirming it.
+                        try:
+                            updated = client.get_event(event_id, html_body=True)
+                        except MicrosoftGraphApiError:
+                            return self._uncertain("rescheduling verification")
+                        if not self._matches_teams_update(updated, tracked, account):
+                            return self._uncertain("rescheduling")
                 tracked.update(
                     pending_operation=None,
                     pending_target=None,
@@ -1790,8 +1829,11 @@ class MicrosoftCalendarTool(Tool):
                     pending_subject=None,
                     start_utc=target[0],
                     end_utc=target[1],
-                    teams_snapshot=tracked.get("pending_teams_snapshot")
-                    or tracked.get("teams_snapshot"),
+                    teams_snapshot=(
+                        meeting_snapshot(updated)
+                        if tracked.get("teams")
+                        else tracked.get("teams_snapshot")
+                    ),
                     pending_teams_snapshot=None,
                 )
                 self._track(call_id, tracked)

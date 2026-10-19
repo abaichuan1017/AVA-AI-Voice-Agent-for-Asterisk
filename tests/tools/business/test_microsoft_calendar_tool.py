@@ -26,6 +26,7 @@ class FakeMicrosoftClient:
         self.events = []
         self.creation_error = None
         self.update_error = None
+        self.update_transform = None
         self.calendar = {
             "id": "calendar-a",
             "canEdit": True,
@@ -113,6 +114,8 @@ class FakeMicrosoftClient:
         self.updated.append((event_id, body, etag))
         event = next(e for e in self.events if e["id"] == event_id)
         event.update(copy.deepcopy(body))
+        if self.update_transform:
+            self.update_transform(event)
         if self.update_error:
             raise self.update_error
         return copy.deepcopy(event)
@@ -528,6 +531,186 @@ async def test_teams_lost_patch_response_reconciles_same_link_and_body(
         and recovered["teams_join_url"] == created["teams_join_url"]
     )
     assert len(fake.updated) == 1
+
+
+def normalize_teams_response(event):
+    content = event["body"]["content"]
+    if '<div id="ava-booking-details">' in content:
+        content = content.replace(
+            '<div id="ava-booking-details">',
+            "<DIV style='font-family:Calibri' id='ava-booking-details'><span>",
+            1,
+        )
+        content = content.replace("</div>", "</span></DIV>", 1)
+    content = content.replace("<br>", "<BR />").replace("&amp;", "&#38;")
+    content = content.replace('class="ms-meeting-blob"', "class='ms-meeting-blob'")
+    event["body"]["content"] = content
+    event["onlineMeeting"].update(conferenceId=None, phones=[])
+    event["@odata.etag"] = 'W/"normalized-version"'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lost_response", [False, True])
+async def test_teams_normalized_patch_and_retry_use_observed_body_baseline(
+    ms_context, teams_booking, lost_response
+):
+    tool, fake = MicrosoftCalendarTool(), FakeMicrosoftClient()
+    move = {
+        "action": "reschedule_event",
+        "booking_confirmed": True,
+        "start_datetime": "2026-04-29T14:00:00-07:00",
+        "end_datetime": "2026-04-29T14:30:00-07:00",
+    }
+    with patch.object(tool, "_client_for_config", return_value=fake):
+        created = await tool.execute(
+            {**teams_booking, "confirmed_notes": "Review A & B"}, ms_context
+        )
+        fake.update_transform = normalize_teams_response
+        fake.update_error = (
+            MicrosoftGraphApiError(
+                "lost PATCH response", error_code="graph_unavailable"
+            )
+            if lost_response
+            else None
+        )
+        first = await tool.execute(move, ms_context)
+        if lost_response:
+            assert first["error_code"] == "mutation_uncertain"
+        else:
+            assert first["status"] == "success", first
+        fake.update_error = None
+        retry = await tool.execute(move, ms_context)
+        assert retry["status"] == "success" and retry["reconciled"], retry
+        assert retry["teams_join_url"] == created["teams_join_url"]
+        assert len(fake.updated) == 1
+        moved_again = await tool.execute(
+            {
+                **move,
+                "start_datetime": "2026-04-29T15:00:00-07:00",
+                "end_datetime": "2026-04-29T15:30:00-07:00",
+            },
+            ms_context,
+        )
+        assert moved_again["status"] == "success", moved_again
+        assert fake.updated[-1][2] == 'W/"normalized-version"'
+        cancelled = await tool.execute(
+            {"action": "delete_event", "cancellation_confirmed": True}, ms_context
+        )
+        assert cancelled["reservation_status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "details",
+        "outside",
+        "href",
+        "join",
+        "conference",
+        "attendees",
+        "subject",
+        "time",
+        "organizer",
+        "hidden",
+    ],
+)
+async def test_teams_pending_normalization_does_not_authorize_changed_event(
+    ms_context, teams_booking, changed
+):
+    tool, fake = MicrosoftCalendarTool(), FakeMicrosoftClient()
+    move = {
+        "action": "reschedule_event",
+        "booking_confirmed": True,
+        "start_datetime": "2026-04-29T14:00:00-07:00",
+        "end_datetime": "2026-04-29T14:30:00-07:00",
+    }
+
+    def changed_response(event):
+        normalize_teams_response(event)
+        if changed == "details":
+            event["body"]["content"] = event["body"]["content"].replace(
+                "14:00", "16:00"
+            )
+        elif changed == "outside":
+            event["body"]["content"] += "External note"
+        elif changed == "href":
+            event["body"]["content"] = event["body"]["content"].replace(
+                'href="https://teams.microsoft.com', 'href="https://other.example'
+            )
+        elif changed == "join":
+            event["onlineMeeting"]["joinUrl"] += "changed"
+        elif changed == "conference":
+            event["onlineMeeting"]["conferenceId"] = "new conference"
+        elif changed == "attendees":
+            event["attendees"].append(
+                {"emailAddress": {"address": "other@example.com"}}
+            )
+        elif changed == "subject":
+            event["subject"] += " external edit"
+        elif changed == "time":
+            event["start"]["dateTime"] = "2026-04-29T23:00:00+00:00"
+        elif changed == "organizer":
+            event["isOrganizer"] = False
+        elif changed == "hidden":
+            event["body"]["content"] = event["body"]["content"].replace(
+                "<span>", '<span style="display:none">'
+            )
+
+    with patch.object(tool, "_client_for_config", return_value=fake):
+        await tool.execute(teams_booking, ms_context)
+        fake.update_transform = changed_response
+        first = await tool.execute(move, ms_context)
+        assert first["error_code"] == "mutation_uncertain", first
+        retry = await tool.execute(move, ms_context)
+        assert retry["status"] == "error", retry
+        assert len(fake.updated) == 1 and not fake.deleted
+        replacement = await tool.execute(
+            {**teams_booking, "replacement_confirmed": True}, ms_context
+        )
+        assert replacement["status"] == "error" and len(fake.created) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verification_error", [False, True])
+async def test_teams_incomplete_patch_response_reads_once_and_retains_pending_on_read_error(
+    ms_context, teams_booking, verification_error
+):
+    tool, fake = MicrosoftCalendarTool(), FakeMicrosoftClient()
+    move = {
+        "action": "reschedule_event",
+        "booking_confirmed": True,
+        "start_datetime": "2026-04-29T14:00:00-07:00",
+        "end_datetime": "2026-04-29T14:30:00-07:00",
+    }
+    original_update, original_get = fake.update_event, fake.get_event
+
+    def incomplete_response(*args, **kwargs):
+        result = original_update(*args, **kwargs)
+        return {"id": result["id"]}
+
+    def read_event(*args, **kwargs):
+        if fake.updated and verification_error:
+            raise MicrosoftGraphApiError(
+                "forbidden after PATCH", status=403, error_code="forbidden_calendar"
+            )
+        return original_get(*args, **kwargs)
+
+    with patch.object(tool, "_client_for_config", return_value=fake):
+        await tool.execute(teams_booking, ms_context)
+        fake.update_transform = normalize_teams_response
+        fake.update_event = incomplete_response
+        fake.get_event = Mock(side_effect=read_event)
+        first = await tool.execute(move, ms_context)
+        assert fake.get_event.call_count == 2
+        if verification_error:
+            assert first["error_code"] == "mutation_uncertain"
+        else:
+            assert first["status"] == "success", first
+        fake.get_event = original_get
+        recovered = await tool.execute(move, ms_context)
+        assert recovered["status"] == "success" and recovered["reconciled"], recovered
+        assert len(fake.updated) == 1
 
 
 @pytest.mark.asyncio

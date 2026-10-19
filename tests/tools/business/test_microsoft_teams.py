@@ -22,11 +22,31 @@ def test_body_refresh_preserves_every_byte_outside_owned_details_and_escapes_cal
     updated = replace_details(
         body, '<div id="ava-booking-details">caller</div>\n{{literal}}'
     )
+
     assert updated["content"].startswith(prefix) and updated["content"].endswith(suffix)
     assert (
         "&lt;div id=&quot;ava-booking-details&quot;&gt;caller&lt;/div&gt;<br>{{literal}}"
         in updated["content"]
     )
+
+
+@pytest.mark.parametrize(
+    "prefix,old",
+    [
+        ("<p>Before\u2028</p>\n", "OLD DETAILS"),
+        ("<p>Before\u2028</p>", "OLD DETAILS\nMORE OLD DETAILS"),
+        ("<p>Before</p>", "OLD DETAILS\u2028\nMORE OLD DETAILS"),
+    ],
+)
+def test_details_splice_uses_htmlparser_lf_offsets_with_unicode_separator(prefix, old):
+    opening = '<div id="ava-booking-details">'
+    suffix = "</div><p>Preserved Microsoft content</p>"
+    result = replace_details(
+        {"contentType": "html", "content": prefix + opening + old + suffix},
+        "NEW DETAILS",
+    )
+    assert result["content"] == prefix + opening + "NEW DETAILS" + suffix
+    assert "OLD DETAILS" not in result["content"]
 
 
 @pytest.mark.parametrize(
