@@ -135,18 +135,20 @@ class _EquivalentHTML(HTMLParser):
         self.tokens = []
         self.invalid = False
 
+    @staticmethod
+    def _font_style(value):
+        return all(
+            rule.strip().lower().startswith("font-family:")
+            for rule in value.split(";")
+            if rule.strip()
+        )
+
     def handle_starttag(self, tag, attrs):
         attrs = sorted((key, value or "") for key, value in attrs)
         # Graph can add presentational wrappers to AVA's plain text. Only the
         # narrow font-family style is ignored; links, hidden text, etc. fail closed.
         presentation = all(
-            key == "style"
-            and all(
-                rule.strip().lower().startswith("font-family:")
-                for rule in value.split(";")
-                if rule.strip()
-            )
-            for key, value in attrs
+            key == "style" and self._font_style(value) for key, value in attrs
         )
         if self.details:
             if tag == "span" and presentation:
@@ -156,13 +158,13 @@ class _EquivalentHTML(HTMLParser):
                 return
             self.invalid = True
         elif tag == "div" and ("id", DETAILS_ID) in attrs:
-            extra = [(key, value) for key, value in attrs if key != "id"]
-            if extra:
-                check = _EquivalentHTML(details=True)
-                check.handle_starttag("span", extra)
-                if check.invalid:
-                    self.invalid = True
-            attrs = [("id", DETAILS_ID)]
+            # Keep existing attributes comparable, including ones we don't
+            # interpret. Only a narrow presentation-only style may be added.
+            attrs = [
+                (key, value)
+                for key, value in attrs
+                if key != "style" or not self._font_style(value)
+            ]
         self.tokens.append(("start", tag, tuple(attrs)))
 
     def handle_startendtag(self, tag, attrs):

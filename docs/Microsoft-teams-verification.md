@@ -26,12 +26,12 @@ was replayed to an external model. Source baseline: `origin/main` at `b8104904`.
 | Target | Result |
 | --- | --- |
 | Unmodified main calendar/Graph baseline | 140 passed |
-| Feature engine/tool/provider/history/metadata regression selection (review fixes) | 313 passed |
+| Feature engine/tool/provider/history/metadata regression selection (review fixes) | 315 passed |
 | Admin config, managed-tools and Microsoft upgrade tests | 158 passed |
 | Complete frontend suite | 471 passed across 66 files |
 | Frontend lint/build | Passed; existing repository warning budget retained |
 | Local browser fixture | Passed Teams switch, verification, settings reopen, stale-result clearing; no page errors |
-| Older deployment candidate engine/tool selection (review fixes) | 215 passed, 16 main-only cases excluded |
+| Older deployment candidate engine/tool selection (review fixes) | 217 passed, 16 main-only cases excluded |
 | Older deployment candidate calendar verification | 10 passed, 6 newer identity/cache cases excluded |
 | Older deployment candidate frontend selection/build | 15 passed; build passed using its existing lockfile |
 

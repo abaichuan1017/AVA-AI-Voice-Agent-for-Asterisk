@@ -8,6 +8,8 @@ from src.tools.business.microsoft_teams import (
     teams_body,
     join_url,
     teams_enabled,
+    meeting_snapshot,
+    pending_update_matches,
 )
 from src.tools.adapters.sanitize import sanitize_tool_result_for_json_string
 
@@ -62,6 +64,31 @@ def test_details_splice_uses_htmlparser_lf_offsets_with_unicode_separator(prefix
 def test_unrecognizable_or_ambiguous_owned_body_refuses_rewrite(content):
     with pytest.raises(BookingValidationError):
         replace_details({"contentType": "HTML", "content": content}, "new")
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_pending_html_keeps_existing_wrapper_attributes_comparable(changed):
+    expected = {
+        "isOnlineMeeting": True,
+        "onlineMeetingProvider": "teamsForBusiness",
+        "onlineMeeting": {"joinUrl": "https://teams.microsoft.com/l/synthetic"},
+        "body": {
+            "contentType": "html",
+            "content": '<div class="existing" style="font-size:11pt" id="ava-booking-details">Details</div>',
+        },
+    }
+    actual = {
+        **expected,
+        "body": {
+            "contentType": "HTML",
+            "content": "<DIV id='ava-booking-details' style='font-size:11pt' class='existing'>Details</DIV>",
+        },
+    }
+    if changed:
+        actual["body"]["content"] = actual["body"]["content"].replace(
+            "font-size:11pt", "display:none"
+        )
+    assert pending_update_matches(actual, meeting_snapshot(expected)) is (not changed)
 
 
 @pytest.mark.parametrize(
