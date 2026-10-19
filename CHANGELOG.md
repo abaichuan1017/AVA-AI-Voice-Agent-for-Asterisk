@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Microsoft Calendar:** opt-in, calendar-backed Teams meetings with separate
+  Teams join and Outlook event links, capability verification, caller-confirmed
+  invitations, and protected same-call rescheduling of Microsoft meeting content.
+
 ### Changed
 
 - **Tools configuration:** replace the expanded built-in settings page with a
@@ -16,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Save & Apply** action. Transfer routing/timing settings use a disclosure.
 
 ### Fixed
+
+- **Calendar booking lifecycle:** support confirmed cancellation/replacement with
+  fresh transaction generations, verify cancellation before replacement, and keep
+  uncertain mutations blocked when reconciliation reads fail. Preserve structured
+  calendar outcomes and silent metadata continuation in OpenAI responses.
 
 - **Tools save/apply and navigation:** preserve drafts and calendar connection
   state while moving between editors; merge background calendar results into the

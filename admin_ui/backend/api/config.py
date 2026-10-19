@@ -21,7 +21,7 @@ from copy import deepcopy
 from email.message import EmailMessage
 from contextlib import contextmanager
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 from typing import Dict, Any, Optional, Union
 import settings
 
@@ -4888,6 +4888,7 @@ class _MicrosoftVerifyRequest(BaseModel):
     calendar_id: Optional[str] = None
     timezone: Optional[str] = None
     account_key: str = "default"
+    teams_enabled: Optional[StrictBool] = None
 
 
 class _MicrosoftDisconnectRequest(BaseModel):
@@ -5179,6 +5180,8 @@ async def verify_microsoft_calendar(req: _MicrosoftVerifyRequest):
     if project_root and project_root not in sys.path:
         sys.path.insert(0, project_root)
     from src.tools.business.ms_graph_client import MicrosoftAccountConfig, MicrosoftGraphApiError, MicrosoftGraphClient
+    from src.tools.business.microsoft_teams import require_teams_calendar, teams_enabled
+    from src.tools.business.microsoft_booking import BookingValidationError
 
     account_key = _validate_ms_account_key_or_400(req.account_key or "default")
     persisted = _read_microsoft_calendar_account(account_key)
@@ -5271,6 +5274,14 @@ async def verify_microsoft_calendar(req: _MicrosoftVerifyRequest):
         )
     if matched.get("canEdit") is False:
         raise HTTPException(status_code=403, detail={"error_code": "calendar_read_only", "message": "The selected calendar is read-only; choose an editable calendar."})
+    try:
+        mode = req.teams_enabled
+        if mode is None:
+            mode = teams_enabled((_read_merged_config_dict().get("tools") or {}).get("microsoft_calendar") or {})
+        if mode:
+            require_teams_calendar(matched)
+    except BookingValidationError as exc:
+        raise HTTPException(status_code=400, detail={"error_code": exc.code, "message": str(exc)})
     return {
         "status": "ok",
         "can_edit": matched.get("canEdit"),
@@ -5279,6 +5290,9 @@ async def verify_microsoft_calendar(req: _MicrosoftVerifyRequest):
         "calendar_id": calendar_id,
         "calendar_name": matched.get("name") or "",
         "configured_timezone": timezone,
+        "teams_enabled": mode,
+        "teams_supported": "teamsForBusiness" in (matched.get("allowedOnlineMeetingProviders") or []),
+        "allowed_online_meeting_providers": matched.get("allowedOnlineMeetingProviders") or [],
     }
 
 
