@@ -76,6 +76,14 @@ Google calendar, Microsoft account/calendar, or voicemail mailbox it can use. A 
 disable always wins. If Save & Apply validation fails, the last good tool generation
 continues serving calls and the unsaved configuration is not published.
 
+Under **In-Call → Transfer & live agents → Destinations**, **Discover endpoints**
+lists candidates using the existing ARI connection. Select candidates, confirm
+their dialable number, description and dialplan context, then add them to your
+edits and use **Save & Apply**. Discovery itself never changes configuration or
+calls. See [assisted transfer destination setup](ARI-Endpoint-Discovery.md) for
+permissions, failure behavior, and the distinction between endpoints and a PBX
+directory.
+
 #### Advanced Settings → Voice Activity Detection
 The **Caller Inactivity** card controls the engine-level no-input watchdog. v7.3.1 defaults to a 30-second idle window, one “Are you still there?” check-in, and a 15-second reply grace period before the configured final message and hangup. The clock pauses while the agent is greeting, speaking, processing, or transferring. Changes are hot-reloaded for new calls; active calls keep the policy captured when they started.
 

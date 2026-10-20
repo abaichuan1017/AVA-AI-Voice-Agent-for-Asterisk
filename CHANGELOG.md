@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ARI endpoint discovery (#753):** assisted transfer destination setup through
+  the existing Asterisk connection. Operators select endpoint candidates and
+  confirm number, description, and dialplan context before staging destinations
+  for Save & Apply. Discovery is bounded and read-only; manual destinations,
+  Agent resource policies, and active-call configuration remain intact.
+
 - **Microsoft Calendar:** opt-in, calendar-backed Teams meetings with separate
   Teams join and Outlook event links, capability verification, caller-confirmed
   invitations, and protected same-call rescheduling of Microsoft meeting content.
