@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   greeting. Admin Streaming controls preserve YAML values and require a deliberate
   restart after calls finish. Delay zero preserves existing timing; file playback,
   WebSocket, existing greeting controls, and transfer handoff remain unchanged.
+  Recheck guard ownership after asynchronous output/fallback session lookups so
+  cancelled greetings cannot emit stale audio or start fallback playback.
+  Bounded prefetch during readiness/silence keeps greeting queues draining to
+  avoid dropping provider chunks or stalling pipeline synthesis.
 
 - **Microsoft Calendar:** opt-in, calendar-backed Teams meetings with separate
   Teams join and Outlook event links, capability verification, caller-confirmed

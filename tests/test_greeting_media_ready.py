@@ -198,6 +198,30 @@ async def test_guard_uses_existing_wire_delegate(monkeypatch, transport, fmt, ra
     assert args.args[1] == silence_byte * silence_bytes + rig.frame[:-silence_bytes]
 
 
+@pytest.mark.asyncio
+async def test_guard_rechecks_stream_after_final_output_session_lookup(monkeypatch):
+    rig = await make_stream(monkeypatch)
+    server = SimpleNamespace(send_audio=AsyncMock(return_value=True))
+    rig.manager.audiosocket_server = server
+    lookup = rig.manager.session_store.get_by_call_id
+    lookups = 0
+
+    async def replace_stream_during_lookup(call_id):
+        nonlocal lookups
+        session = await lookup(call_id)
+        lookups += 1
+        if lookups == 2:
+            rig.manager.active_streams['call'] = dict(rig.info, stream_id='replacement')
+        return session
+
+    monkeypatch.setattr(rig.manager.session_store, 'get_by_call_id', replace_stream_during_lookup)
+    result = await StreamingPlaybackManager._send_audio_chunk(
+        rig.manager, 'call', rig.sid, rig.frame, target_fmt='ulaw', target_rate=8000,
+    )
+    assert result is False
+    server.send_audio.assert_not_awaited()
+
+
 @pytest.mark.parametrize('ready', [False, True])
 @pytest.mark.asyncio
 async def test_timeout_zero_checks_once(monkeypatch, ready):
@@ -270,6 +294,39 @@ async def test_failed_silence_is_not_replayed_and_fallback_is_once(monkeypatch):
     await rig.manager._fallback_to_file_playback('call', rig.sid)
     await rig.manager._fallback_to_file_playback('call', rig.sid)
     rig.manager.fallback_playback_manager.play_audio.assert_awaited_once()
+
+
+@pytest.mark.parametrize('change', ['hangup', 'transfer', 'connection', 'session', 'stream'])
+@pytest.mark.asyncio
+async def test_fallback_rechecks_ownership_after_session_lookup(monkeypatch, change):
+    rig = await make_stream(monkeypatch)
+    playback = AsyncMock(return_value='file')
+    rig.manager.fallback_playback_manager = SimpleNamespace(play_audio=playback)
+    lookup = rig.manager.session_store.get_by_call_id
+    lookups = 0
+
+    async def ownership_changes_during_lookup(call_id):
+        nonlocal lookups
+        session = await lookup(call_id)
+        lookups += 1
+        if lookups == 2:
+            if change == 'hangup':
+                session.cleanup_in_progress = True
+            elif change == 'transfer':
+                session.current_action = {'type': 'transfer'}
+            elif change == 'connection':
+                session.audiosocket_conn_id = 'replacement'
+            elif change == 'session':
+                session = CallSession(call_id='call', caller_channel_id='call')
+                await rig.manager.session_store.upsert_call(session)
+            else:
+                rig.manager.active_streams['call'] = dict(rig.info, stream_id='replacement')
+        return session
+
+    monkeypatch.setattr(rig.manager.session_store, 'get_by_call_id', ownership_changes_during_lookup)
+    await rig.manager._fallback_to_file_playback('call', rig.sid)
+    playback.assert_not_awaited()
+    assert rig.manager.frame_remainders['call'] == rig.frame
 
 
 def test_engine_passes_both_settings_without_activating_old_control(monkeypatch):
@@ -377,6 +434,90 @@ async def test_short_closed_greeting_survives_readiness_wait_longer_than_old_dra
     manager._send_audio_chunk.assert_awaited_once()
     assert manager._send_audio_chunk.await_args.args[2] == b'\x21' * 160
     assert 'short' not in manager.active_streams
+
+
+@pytest.mark.parametrize('kind', ['greeting', 'pipeline-tts-greeting'])
+@pytest.mark.asyncio
+async def test_guard_keeps_consuming_realtime_greeting_without_queue_drops(kind):
+    store = SessionStore()
+    session = CallSession(call_id='buffer', caller_channel_id='buffer', audiosocket_conn_id='conn')
+    await store.upsert_call(session)
+    manager = StreamingPlaybackManager(store, Mock(), audio_transport='audiosocket', streaming_config={
+        'greeting_media_ready_delay_ms': 40, 'greeting_media_ready_timeout_ms': 400,
+        'jitter_buffer_ms': 40, 'provider_grace_ms': 0,
+        'normalizer': {'enabled': False}, 'attack_ms': 0,
+    })
+    manager._process_audio_chunk = AsyncMock(side_effect=lambda _call, chunk: chunk)
+    manager._send_audio_chunk = AsyncMock(return_value=True)
+    q = asyncio.Queue(maxsize=2)
+    sid = await manager.start_streaming_playback('buffer', q, playback_type=kind,
+                                               source_encoding='ulaw', source_sample_rate=8000)
+    info = manager.active_streams['buffer']
+    chunks = [bytes([i + 1]) * 160 for i in range(14)]
+    try:
+        for chunk in chunks:
+            if kind == 'greeting':
+                q.put_nowait(chunk)  # The provider path drops on QueueFull.
+            else:
+                await asyncio.wait_for(q.put(chunk), timeout=.06)
+            await asyncio.sleep(.02)
+        manager.note_greeting_media_rx(session, 'audiosocket', 'conn')
+        await asyncio.wait_for(q.put(None), timeout=.1)
+        await asyncio.wait_for(info['streaming_task'], timeout=2)
+        actual = b''.join(c.args[2] for c in manager._send_audio_chunk.await_args_list)
+        assert actual == b'\xff' * 320 + b''.join(chunks)
+    finally:
+        if 'buffer' in manager.active_streams:
+            await manager.stop_streaming_playback('buffer')
+
+
+@pytest.mark.parametrize('source_frames', [1, 4])
+@pytest.mark.asyncio
+async def test_guard_prefetch_is_bounded_and_preserves_end_sentinel(monkeypatch, source_frames):
+    from src.core.streaming_playback_manager import _JITTER_SENTINEL
+    rig = await make_stream(monkeypatch, delay=40, timeout=100)
+    rig.info['sentinel_seen'] = False
+    assert await rig.tick() == 'wait'
+    queue = rig.manager.jitter_buffers['call']
+    for _ in range(20):
+        if not queue.full():
+            queue.put_nowait(rig.frame * source_frames)
+        assert await rig.tick() == 'wait'
+    # At most the configured 140ms window plus the first prepared 20ms
+    # frame is retained; a frozen clock must not permit unbounded growth.
+    assert 8 * len(rig.frame) <= len(rig.manager.frame_remainders['call']) < (8 + source_frames) * len(rig.frame)
+    assert not queue.empty()
+    rig.clock.now += .11
+    while not queue.empty() or rig.manager.frame_remainders['call']:
+        assert await rig.tick() == 'sent'
+    queue.put_nowait(_JITTER_SENTINEL)
+    assert await rig.tick() == 'finished'
+    assert rig.info['sentinel_seen']
+
+
+@pytest.mark.asyncio
+async def test_guard_prefetch_does_not_cross_transport_boundary(monkeypatch):
+    from src.core.streaming_playback_manager import _TransportBoundary
+    rig = await make_stream(monkeypatch)
+    rig.info['sentinel_seen'] = False
+    assert await rig.tick() == 'wait'
+    boundary = _TransportBoundary()
+    queue = rig.manager.jitter_buffers['call']
+    queue.put_nowait(boundary)
+    queue.put_nowait(b'\x42' * len(rig.frame))
+    assert await rig.tick() == 'wait'
+    assert rig.info['transport_pending_boundary'] is boundary
+    assert queue.qsize() == 1
+    assert not boundary.completed.done()
+    rig.manager.finish_transport_segment = AsyncMock(return_value=True)
+    rig.clock.now += 1.01
+    assert await rig.tick() == 'sent'
+    assert rig.manager._send_audio_chunk.await_args.args[2] == rig.frame
+    assert await rig.tick() == 'wait'
+    assert boundary.completed.result() is True
+    assert queue.qsize() == 1
+    assert await rig.tick() == 'sent'
+    assert rig.manager._send_audio_chunk.await_args.args[2] == b'\x42' * len(rig.frame)
 
 
 @pytest.mark.asyncio

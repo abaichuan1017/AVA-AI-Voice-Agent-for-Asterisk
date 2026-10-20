@@ -1329,7 +1329,21 @@ class StreamingPlaybackManager:
         sentinel_seen = bool(stream_info.get('sentinel_seen', False))
         pending = self.frame_remainders.get(call_id, b"")
 
-        while len(pending) < frame_size and not stream_info.get("transport_pending_boundary"):
+        drain_target = frame_size
+        guard = stream_info.get('greeting_media_guard')
+        if guard and guard.phase in {'waiting', 'silence'}:
+            # Keep consuming at the normal wire cadence while speech is held,
+            # otherwise bounded upstream queues fill and providers drop audio.
+            # Extra prefetch is limited to the configured hold window. A source
+            # chunk is converted atomically, so the last one may cross the cap,
+            # as it can in normal frame preparation; never drain another then.
+            chunk_ms = max(1, int(stream_info.get('chunk_size_ms') or self.chunk_size_ms))
+            hold_frames = math.ceil(
+                (self.greeting_media_ready_timeout_ms + self.greeting_media_ready_delay_ms) / chunk_ms
+            )
+            drain_target = min((1 + hold_frames) * frame_size, len(pending) + frame_size)
+
+        while len(pending) < drain_target and not stream_info.get("transport_pending_boundary"):
             try:
                 chunk = jitter_buffer.get_nowait()
             except asyncio.QueueEmpty:
@@ -3081,7 +3095,11 @@ class StreamingPlaybackManager:
                 return False
             if stream_info.get('greeting_media_guard'):
                 current_session = await self.session_store.get_by_call_id(call_id)
-                if not self._greeting_media_owner_current(current_session, stream_info):
+                if (
+                    self.active_streams.get(call_id) is not stream_info
+                    or stream_info.get('stream_id') != stream_id
+                    or not self._greeting_media_owner_current(current_session, stream_info)
+                ):
                     return False
 
             if self.audio_transport == "websocket":
@@ -3630,6 +3648,13 @@ class StreamingPlaybackManager:
             if not session:
                 logger.error("Cannot fallback - session not found",
                            call_id=call_id)
+                return
+            if guard and (
+                self.active_streams.get(call_id) is not info
+                or info.get('stream_id') != stream_id
+                or not self._greeting_media_owner_current(session, info)
+            ):
+                guard.phase = 'cancelled'
                 return
             
             # Collect any remaining audio chunks

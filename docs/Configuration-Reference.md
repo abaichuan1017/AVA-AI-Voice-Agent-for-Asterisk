@@ -491,7 +491,14 @@ if ready it sends that silence; otherwise it resumes existing playback/fallback
 immediately. A positive timeout bounds waiting, then resumes that same existing
 path without an additional readiness retry or replaying the greeting. The delay
 and timeout do not apply again to later chunks or responses. Stop, hangup,
-transfer, or lost output ownership cancels pending work.
+transfer, or lost output ownership cancels pending work, including output and
+fallback that have not yet started after an asynchronous session lookup.
+During the hold, the pacer continues consuming queued speech into a bounded
+prefetch buffer at its normal cadence. The additional buffer is limited to the
+configured timeout plus delay window and one prepared frame; a single converted
+source chunk may cross that limit. Further audio uses the existing bounded
+upstream queues until playback resumes. Sentinels and transport boundaries keep
+their order.
 
 Values must be whole-number YAML integers; strings, booleans, fractions, negatives,
 and values above the ranges are rejected. Larger settings trade greeting latency
