@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Initial greeting readiness (#752):** opt-in AudioSocket/ExternalMedia streaming
+  guard with bounded inbound-media waiting and paced silence before the first
+  greeting. Admin Streaming controls preserve YAML values and require a deliberate
+  restart after calls finish. Delay zero preserves existing timing; file playback,
+  WebSocket, existing greeting controls, and transfer handoff remain unchanged.
+
 - **Microsoft Calendar:** opt-in, calendar-backed Teams meetings with separate
   Teams join and Outlook event links, capability verification, caller-confirmed
   invitations, and protected same-call rescheduling of Microsoft meeting content.

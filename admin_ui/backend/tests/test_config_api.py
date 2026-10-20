@@ -567,3 +567,40 @@ def test_unrelated_config_save_preserves_absent_and_zero_recovery_fields(tmp_pat
     assert parsed["providers"] == original
     assert "connect_max_retries" not in parsed["providers"]["google_live"]
     assert parsed["providers"]["customer_recovery"]["connect_max_retries"] == 0
+
+
+@pytest.mark.parametrize("key,maximum", [
+    ("greeting_media_ready_delay_ms", 2000), ("greeting_media_ready_timeout_ms", 5000),
+])
+@pytest.mark.parametrize("value", [-1, 5001, 1.5, 1.0, True, None, "100", "bad"])
+def test_greeting_media_validation_rejects_bad_values(key, maximum, value):
+    parsed = yaml.safe_load(Path(config.settings.CONFIG_PATH).read_text())
+    parsed.setdefault("streaming", {})[key] = value
+    with pytest.raises(HTTPException) as exc_info:
+        config._validate_ai_agent_config(yaml.safe_dump(parsed, sort_keys=False))
+    assert exc_info.value.status_code == 400
+    assert key in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize("delay,timeout", [(0, 0), (0, 1000), (2000, 5000)])
+def test_greeting_media_save_reopen_and_unrelated_edit_preserve_yaml(monkeypatch, delay, timeout):
+    parsed = yaml.safe_load(Path(config.settings.CONFIG_PATH).read_text())
+    parsed["streaming"].update(greeting_media_ready_delay_ms=delay, greeting_media_ready_timeout_ms=timeout)
+    original = deepcopy(parsed)
+    monkeypatch.setattr(config, "_migrate_inline_provider_secrets", lambda _cfg: False)
+    monkeypatch.setattr(config, "_assert_in_use_audio_profiles_unchanged", lambda *_a, **_kw: None)
+    monkeypatch.setattr(config, "_read_merged_config_dict", lambda: deepcopy(original))
+    monkeypatch.setattr(config, "_read_base_config_dict", lambda: {})
+    writes = []
+    monkeypatch.setattr(config, "_write_local_config", writes.append)
+    config.persist_config_content(yaml.safe_dump(parsed, sort_keys=False))
+    reopened = yaml.safe_load(writes[-1])
+    reopened["streaming"]["jitter_buffer_ms"] = 111
+    result = config.persist_config_content(yaml.safe_dump(reopened, sort_keys=False))
+    saved = yaml.safe_load(writes[-1])
+    assert saved["streaming"]["greeting_media_ready_delay_ms"] == delay
+    assert saved["streaming"]["greeting_media_ready_timeout_ms"] == timeout
+    assert saved["streaming"]["greeting_min_start_ms"] == original["streaming"]["greeting_min_start_ms"]
+    assert saved["streaming"]["greeting_rtp_wait_ms"] == original["streaming"]["greeting_rtp_wait_ms"]
+    assert saved["providers"] == original["providers"]
+    assert result["recommended_apply_method"] == "restart"

@@ -25,7 +25,7 @@ from src.audio.resampler import (
 )
 from src.core.session_store import SessionStore
 from src.audio.transports.output import OutputFrame, create_output_transport
-from src.core.models import CallSession, PlaybackRef
+from src.core.models import CallSession, GreetingMediaState, PlaybackRef
 from src.config.provider_instances import FULL_AGENT_KINDS_WITH_NATIVE_TTS_GATING
 from src.utils.diagnostic_paths import (
     DEFAULT_DIAGNOSTIC_TAP_DIR,
@@ -267,6 +267,8 @@ class StreamingPlaybackManager:
             max(1, int(math.ceil(self.greeting_min_start_ms / max(1, self.chunk_size_ms))))
             if self.greeting_min_start_ms > 0 else self.min_start_chunks
         )
+        self.greeting_media_ready_delay_ms = self.streaming_config.get('greeting_media_ready_delay_ms', 0)
+        self.greeting_media_ready_timeout_ms = self.streaming_config.get('greeting_media_ready_timeout_ms', 1000)
         # Logging verbosity override
         self.logging_level = (self.streaming_config.get('logging_level') or "info").lower()
         if self.logging_level == "debug":
@@ -883,6 +885,7 @@ class StreamingPlaybackManager:
                 'last_emit_was_filler': False,
             }
             self._startup_ready[call_id] = bool(initial_startup_ready)
+            self._attach_greeting_media_guard(session, self.active_streams[call_id])
             try:
                 _STREAM_STARTED_TOTAL.labels(playback_type).inc()
             except Exception:
@@ -1088,6 +1091,11 @@ class StreamingPlaybackManager:
 
                 except asyncio.TimeoutError:
                     # No audio chunk received within timeout
+                    guard = (self.active_streams.get(call_id) or {}).get('greeting_media_guard')
+                    if guard and guard.phase in {'waiting', 'silence'}:
+                        # The consumer owns this bounded wait. A producer timeout
+                        # must not race it into file fallback with the same audio.
+                        continue
                     if not self.continuous_stream:
                         if time.time() - last_send_time > fallback_timeout:
                             if self.audio_transport == "websocket":
@@ -1191,6 +1199,10 @@ class StreamingPlaybackManager:
                 #
                 # We still cap the wait to avoid hanging indefinitely on transport failures.
                 drain_timeout = max(0.5, (frames_remaining * chunk_sec) + 0.5)
+                if stream_info and stream_info.get('greeting_media_guard'):
+                    drain_timeout += (
+                        self.greeting_media_ready_timeout_ms + self.greeting_media_ready_delay_ms
+                    ) / 1000.0
                 drain_timeout = min(120.0, drain_timeout)
                 if self.audio_transport == "websocket":
                     # Local frame count excludes Asterisk's remote queue and
@@ -1239,6 +1251,12 @@ class StreamingPlaybackManager:
                 status = await self._drain_next_frame(
                     call_id, stream_id, jitter_buffer
                 )
+                if status == "greeting-cancelled":
+                    current = self.active_streams.get(call_id)
+                    if current and current.get('stream_id') == stream_id:
+                        current['end_reason'] = 'interrupted'
+                        await self.stop_streaming_playback(call_id)
+                    break
                 if status == "error":
                     if self.audio_transport == "websocket":
                         info = self.active_streams.get(call_id)
@@ -1265,7 +1283,8 @@ class StreamingPlaybackManager:
                     break
                 if status == "finished":
                     break
-                next_tick += tick_seconds
+                info = self.active_streams.get(call_id) or {}
+                next_tick += info.pop('greeting_tick_seconds', tick_seconds)
                 now_after = time.perf_counter()
                 if next_tick < now_after:
                     next_tick = now_after
@@ -1323,12 +1342,19 @@ class StreamingPlaybackManager:
                 stream_info["transport_pending_boundary"] = chunk
                 break
             processed_chunk = await self._process_audio_chunk(call_id, chunk)
+            if stream_info.get('greeting_media_guard') and self.active_streams.get(call_id) is not stream_info:
+                return 'greeting-cancelled'
             if not processed_chunk:
                 try:
                     self._decrement_buffered_bytes(call_id, len(chunk))
                 except Exception:
                     pass
                 continue
+            if stream_info.get('greeting_media_guard'):
+                # Until the first speech write succeeds, fallback needs the
+                # original source bytes rather than a mixture of a converted
+                # remainder and raw provider chunks still in the queue.
+                stream_info.setdefault('greeting_source_prefix', bytearray()).extend(chunk)
             pending += processed_chunk
 
         self.frame_remainders[call_id] = pending
@@ -1347,6 +1373,23 @@ class StreamingPlaybackManager:
         boundary = stream_info.get("transport_pending_boundary")
         if self._should_wait_for_low_water(call_id, stream_info, available_frames, sentinel_seen or bool(boundary)):
             return "wait"
+
+        if stream_info.get('greeting_media_guard'):
+            # Keep the prepared speech in its remainder while the guard waits or
+            # emits silence. Starting the stream/socket alone starts no deadline.
+            if pending:
+                result = await self._advance_greeting_media_guard(
+                    call_id, stream_id, stream_info, target_fmt, target_rate, frame_size,
+                )
+                if result == 'greeting-prefixed':
+                    pending = self.frame_remainders[call_id]
+                elif result is not None:
+                    return result
+            elif (
+                stream_info['greeting_media_guard'].phase in {'new', 'waiting', 'silence'}
+                and not sentinel_seen and not boundary
+            ):
+                return "wait"
 
         if len(pending) >= frame_size:
             frame = pending[:frame_size]
@@ -1598,7 +1641,9 @@ class StreamingPlaybackManager:
         target_rate: int,
         *,
         filler: bool,
+        greeting_silence: bool = False,
     ) -> str:
+        emitting_info = self.active_streams.get(call_id) or {}
         success = await self._send_audio_chunk(
             call_id,
             stream_id,
@@ -1606,7 +1651,20 @@ class StreamingPlaybackManager:
             target_fmt=target_fmt,
             target_rate=target_rate,
         )
+        guard = emitting_info.get('greeting_media_guard')
+        if guard:
+            session = await self.session_store.get_by_call_id(call_id)
+            if (
+                self.active_streams.get(call_id) is not emitting_info
+                or not self._greeting_media_owner_current(session, emitting_info)
+            ):
+                guard.phase = 'cancelled'
+                return 'greeting-cancelled'
         if not success:
+            if greeting_silence:
+                # Generated pre-roll is not provider audio and must not enter
+                # the retry/file-fallback speech buffer.
+                return "error"
             # Preserve audio for retry/fallback. Without this, a failed first outbound send can
             # drain the jitter buffer and leave nothing for file playback fallback.
             try:
@@ -1657,7 +1715,15 @@ class StreamingPlaybackManager:
                 logger.debug("Greeting fallback check failed", call_id=call_id, exc_info=True)
             return "error"
         if not filler:
-            self._decrement_buffered_bytes(call_id, len(frame))
+            if guard:
+                guard.phase = 'done'
+                emitting_info.pop('greeting_media_guard', None)
+                emitting_info.pop('greeting_source_prefix', None)
+            prefix_bytes = int(emitting_info.pop('greeting_mixed_silence_bytes', 0))
+            speech_bytes = len(frame) - prefix_bytes
+            if prefix_bytes:
+                emitting_info['greeting_silence_bytes'] = int(emitting_info.get('greeting_silence_bytes', 0)) + prefix_bytes
+            self._decrement_buffered_bytes(call_id, speech_bytes)
             # Reset low-buffer backoff when sending real audio
             try:
                 info = self.active_streams.get(call_id)
@@ -1680,10 +1746,12 @@ class StreamingPlaybackManager:
                 if not filler:
                     info['last_real_emit_ts'] = now
                     info['idle_ticks'] = 0
-                    info['real_tx_bytes'] = int(info.get('real_tx_bytes', 0) or 0) + len(frame)
+                    info['real_tx_bytes'] = int(info.get('real_tx_bytes', 0) or 0) + speech_bytes
             except Exception:
                 pass
-            if filler:
+            if greeting_silence:
+                info['greeting_silence_bytes'] = int(info.get('greeting_silence_bytes', 0)) + len(frame)
+            elif filler:
                 try:
                     _STREAM_UNDERFLOW_EVENTS_TOTAL.inc(1)
                     _STREAM_FILLER_BYTES_TOTAL.inc(len(frame))
@@ -1695,6 +1763,127 @@ class StreamingPlaybackManager:
                 except Exception:
                     pass
         return "sent"
+
+    def _greeting_media_token(self, session: CallSession) -> Optional[tuple]:
+        identity = (
+            session.audiosocket_conn_id if self.audio_transport == 'audiosocket'
+            else session.external_media_id or session.media_channel_id
+        )
+        return (self.audio_transport, identity) if identity else None
+
+    def note_greeting_media_rx(self, session: CallSession, transport: str, identity: Optional[str]) -> None:
+        """Called only after transport decoding and live-call correlation."""
+        if (
+            self.greeting_media_ready_delay_ms <= 0
+            or transport != self.audio_transport
+            or transport not in {'audiosocket', 'externalmedia'}
+            or session.cleanup_in_progress or session.cleanup_completed
+        ):
+            return
+        token = (transport, identity) if identity else None
+        if token is None or token != self._greeting_media_token(session):
+            return
+        state = session.greeting_media
+        if state.inbound_token != token:
+            state.inbound_token = token
+            state.inbound_at = self._greeting_now()
+
+    @staticmethod
+    def _greeting_now() -> float:
+        return time.monotonic()
+
+    def _attach_greeting_media_guard(self, session: CallSession, info: Dict[str, Any]) -> None:
+        if self.greeting_media_ready_delay_ms <= 0 or self.audio_transport not in {'audiosocket', 'externalmedia'}:
+            return
+        state = session.greeting_media
+        if state.claimed:
+            return
+        # First response without an explicit greeting consumes the opportunity
+        # too; a later stream must not be mistaken for the call's initial audio.
+        state.claimed = True
+        if info.get('playback_type') not in {'greeting', 'pipeline-tts-greeting'}:
+            return
+        state.output_token = self._greeting_media_token(session)
+        info['greeting_media_guard'] = state
+
+    def _greeting_media_owner_current(self, session: Optional[CallSession], info: Dict[str, Any]) -> bool:
+        state = info.get('greeting_media_guard')
+        if state is None:
+            return True
+        if (
+            session is None or session.greeting_media is not state
+            or session.cleanup_in_progress or session.cleanup_completed
+            or info.get('stop_requested') or state.phase == 'cancelled'
+            or getattr(session, 'transfer_active', False)
+            or getattr(session, 'transfer_state', None)
+            or session.transfer_destination
+            or (session.current_action or {}).get('type') in {'transfer', 'attended_transfer'}
+        ):
+            return False
+        token = self._greeting_media_token(session)
+        if state.output_token is None:
+            state.output_token = token
+        return token == state.output_token
+
+    async def _advance_greeting_media_guard(
+        self, call_id: str, stream_id: str, info: Dict[str, Any],
+        target_fmt: str, target_rate: int, frame_size: int,
+    ) -> Optional[str]:
+        state: GreetingMediaState = info['greeting_media_guard']
+        session = await self.session_store.get_by_call_id(call_id)
+        if (
+            self.active_streams.get(call_id) is not info
+            or info.get('stream_id') != stream_id
+            or not self._greeting_media_owner_current(session, info)
+        ):
+            state.phase = 'cancelled'
+            return 'greeting-cancelled'
+        now = self._greeting_now()
+        if state.phase == 'new':
+            state.deadline = now + self.greeting_media_ready_timeout_ms / 1000.0
+            state.phase = 'waiting'
+        if state.phase == 'waiting':
+            if (
+                state.output_token is not None and state.inbound_token == state.output_token
+                and state.inbound_at is not None and state.inbound_at <= state.deadline
+            ):
+                state.phase = 'silence'
+                state.silence_samples = math.ceil(target_rate * self.greeting_media_ready_delay_ms / 1000.0)
+            elif now >= state.deadline:
+                state.phase = 'timeout'
+                logger.info('Greeting media readiness timed out; resuming existing playback', call_id=call_id)
+                return None
+            else:
+                return 'wait'
+        if state.phase == 'silence':
+            if now < state.silence_until:
+                info['greeting_tick_seconds'] = state.silence_until - now
+                return 'wait'
+            if state.silence_samples:
+                bps = self._bytes_per_sample(target_fmt)
+                samples = min(state.silence_samples, max(1, frame_size // bps))
+                frame = self._silence_byte(target_fmt) * (samples * bps)
+                if len(frame) < frame_size:
+                    # Keep fixed-size wire packets: the final partial silence
+                    # shares a packet with the start of speech. In particular,
+                    # RTP's established packet timestamp cadence stays intact.
+                    self.frame_remainders[call_id] = frame + self.frame_remainders.get(call_id, b'')
+                    info['greeting_mixed_silence_bytes'] = len(frame)
+                    state.silence_samples = 0
+                    state.phase = 'released'
+                    return 'greeting-prefixed'
+                result = await self._emit_frame(
+                    call_id, stream_id, frame, target_fmt, target_rate,
+                    filler=True, greeting_silence=True,
+                )
+                if result == 'sent':
+                    state.silence_samples -= samples
+                    duration = samples / target_rate
+                    state.silence_until = self._greeting_now() + duration
+                    info['greeting_tick_seconds'] = duration
+                return result
+            state.phase = 'released'
+        return None
     
     def _process_websocket_chunk(self, call_id: str, chunk: bytes) -> bytes:
         """Convert provider audio to the immutable call wire format (PCM is LE)."""
@@ -2853,6 +3042,8 @@ class StreamingPlaybackManager:
                 logger.warning("Cannot stream audio - session not found", call_id=call_id)
                 return False
             stream_info = self.active_streams.get(call_id, {})
+            if not self._greeting_media_owner_current(session, stream_info):
+                return False
             if stream_info.get("stream_id") != stream_id or stream_info.get("stop_requested"):
                 return False
             if self.audio_diag_callback:
@@ -2888,6 +3079,10 @@ class StreamingPlaybackManager:
             # send an old frame into any transport after ownership changed.
             if self.active_streams.get(call_id) is not stream_info or stream_info.get("stop_requested"):
                 return False
+            if stream_info.get('greeting_media_guard'):
+                current_session = await self.session_store.get_by_call_id(call_id)
+                if not self._greeting_media_owner_current(current_session, stream_info):
+                    return False
 
             if self.audio_transport == "websocket":
                 if not self.websocket_server or stream_info.get("stop_requested") or stream_info.get("websocket_output_failed"):
@@ -3413,6 +3608,17 @@ class StreamingPlaybackManager:
     ) -> None:
         """Fallback to file-based playback when streaming fails."""
         try:
+            info = self.active_streams.get(call_id) or {}
+            guard = info.get('greeting_media_guard')
+            if guard:
+                session = await self.session_store.get_by_call_id(call_id)
+                if (
+                    self.active_streams.get(call_id) is not info
+                    or info.get('stream_id') != stream_id or guard.fallback_started
+                    or not self._greeting_media_owner_current(session, info)
+                ):
+                    return
+                guard.fallback_started = True
             if not self.fallback_playback_manager:
                 logger.error("No fallback playback manager available",
                            call_id=call_id,
@@ -3432,8 +3638,12 @@ class StreamingPlaybackManager:
             # Otherwise, a failed first outbound send can leave nothing to play on fallback.
             try:
                 rem = self.frame_remainders.pop(call_id, b"") or b""
-                if rem:
-                    remaining_audio.extend(rem)
+                source_prefix = info.pop('greeting_source_prefix', b'') if guard else b''
+                if source_prefix:
+                    remaining_audio.extend(source_prefix)
+                elif rem:
+                    mixed_silence = int(info.get('greeting_mixed_silence_bytes', 0)) if guard else 0
+                    remaining_audio.extend(rem[mixed_silence:])
             except Exception:
                 pass
             if call_id in self.jitter_buffers:
@@ -3465,6 +3675,9 @@ class StreamingPlaybackManager:
                     # Normalize to PCM16
                     if self._is_mulaw(src_encoding):
                         pcm = mulaw_to_pcm16le(raw_buf)
+                        src_rate = 8000
+                    elif guard and src_encoding == 'alaw':
+                        pcm = audioop.alaw2lin(raw_buf, 2)
                         src_rate = 8000
                     else:
                         pcm = raw_buf
@@ -3540,6 +3753,9 @@ class StreamingPlaybackManager:
                     # audio as an ARI file or interrupt a healthy slow drain.
                     continue
                 
+                guard = stream_info.get('greeting_media_guard')
+                if guard and guard.phase in {'waiting', 'silence'}:
+                    continue  # The bounded greeting guard owns startup timing.
                 if time_since_last_chunk > (self.connection_timeout_ms / 1000.0):
                     logger.warning("🎵 STREAMING PLAYBACK - Connection timeout",
                                  call_id=call_id,
@@ -3612,6 +3828,8 @@ class StreamingPlaybackManager:
             # producer so its finally block cannot duplicate slow async cleanup
             # while this method is waiting for all stream tasks to settle.
             stream_info['stop_requested'] = True
+            if stream_info.get('greeting_media_guard'):
+                stream_info['greeting_media_guard'].phase = 'cancelled'
             remote_abort_confirmed = True
             if self.audio_transport == "websocket":
                 stream_info["end_reason"] = "interrupted"
@@ -3645,7 +3863,7 @@ class StreamingPlaybackManager:
             seen_tasks = set()
 
             def _cancel_task(task: Any) -> None:
-                if not task or not hasattr(task, "cancel"):
+                if not task or task is asyncio.current_task() or not hasattr(task, "cancel"):
                     return
                 task_id = id(task)
                 if task_id in seen_tasks:
