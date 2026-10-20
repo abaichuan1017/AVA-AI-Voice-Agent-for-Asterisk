@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Google Live long calls (#756):** add opt-in session resumption and independent
+  context compression for Developer API and Vertex AI. Turn over connections on
+  `GoAway` at safe checkpoints with bounded recovery, preserve call/tool state,
+  and report unexpected clean closes instead of leaving dead air. Both options
+  remain disabled until explicitly enabled in provider settings.
+
 - **Teams rescheduling:** tolerate equivalent Graph HTML serialization after a
   conditional update and retain the observed body as the next baseline. Match
   HTML parser offsets using LF only so Unicode separators cannot retain stale

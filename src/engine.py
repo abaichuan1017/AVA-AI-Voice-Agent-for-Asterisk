@@ -14092,6 +14092,20 @@ class Engine:
         except Exception:
             logger.debug("Transport audit encountered an error", exc_info=True)
 
+    async def _can_resume_google_session(self, call_id: str, expected_provider=None) -> bool:
+        """Transport recovery cannot take a call back from termination/routing."""
+        session = await self.session_store.get_by_call_id(call_id)
+        return bool(
+            session and not session.cleanup_in_progress
+            and not session.cleanup_after_tts
+            and not self._session_was_transferred(session)
+            and not self._session_has_pending_attended_transfer(session)
+            and not isinstance(getattr(session, "pending_deferred_transfer", None), dict)
+            and call_id not in getattr(self, "_terminal_hangup_started", set())
+            and (expected_provider is None
+                 or getattr(self, "_call_providers", {}).get(call_id) is expected_provider)
+        )
+
     async def on_provider_event(self, event: Dict[str, Any]):
         """Handle async events from the active provider (Deepgram/OpenAI/local).
 
@@ -14107,6 +14121,11 @@ class Engine:
             session = await self.session_store.get_by_call_id(call_id)
             if not session:
                 logger.warning("Provider event for unknown call", event_type=etype, call_id=call_id)
+                return
+            if etype == "ProviderSessionRecovery":
+                # Recovery has its own short, bounded deadline. Do not let the
+                # silence watchdog send prompts into a socket being replaced.
+                await self._no_input_note_processing(call_id, bool(event.get("active")))
                 return
             if bool(getattr(session, "cleanup_in_progress", False)) and (
                 "audio_response_id" in event or etype == "GoogleAudioGenerationComplete"
@@ -14262,7 +14281,13 @@ class Engine:
                     reason=reason,
                 )
                 await self._stop_connection_audio(session, reason="provider-disconnected")
-                google_disconnect_drain = bool(self._google_long_audio_provider(session))
+                if session.cleanup_in_progress or self._session_was_transferred(session):
+                    return
+                google_disconnect_drain = bool(self._google_long_audio_provider(session)) or (
+                    self._get_provider_kind(provider) == "google_live"
+                    and (self._session_has_pending_attended_transfer(session)
+                         or isinstance(getattr(session, "pending_deferred_transfer", None), dict))
+                )
                 if not google_disconnect_drain:
                     try:
                         session.provider_session_active = False
@@ -21048,6 +21073,9 @@ class Engine:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to inject tool context: {e}", call_id=call_id)
+
+            if self._get_provider_kind(provider_name) == "google_live":
+                provider._recovery_guard = lambda owner=provider: self._can_resume_google_session(call_id, owner)
 
             # Hangup markers are resolved into the call's immutable tool config
             # before provider startup. Call-owned providers may consume the
