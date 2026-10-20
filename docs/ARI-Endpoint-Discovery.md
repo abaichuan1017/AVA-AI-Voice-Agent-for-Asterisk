@@ -64,10 +64,11 @@ the transfer execution path.
 
 ## Limits and troubleshooting
 
-- Discovery has a 10-second network deadline, a 1 MiB decoded response limit,
+- Discovery has a 10-second network deadline, a 1 MiB uncompressed response limit,
   and a limit of 5,000 endpoints. Responses must be complete and structurally
   valid; duplicate technology/resource pairs or malformed rows reject the
-  inventory atomically.
+  inventory atomically. Discovery requests identity encoding and rejects compressed
+  responses before reading or decompressing their bodies.
 - Up to 100 destinations can be reviewed per batch. Assisted setup accepts keys
   of 1–64 letters/numbers/underscores/hyphens, starting with a letter or number;
   numbers of 1–32 digits; descriptions of 1–200 characters without control

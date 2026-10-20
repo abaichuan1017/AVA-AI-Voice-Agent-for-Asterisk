@@ -1,5 +1,7 @@
 import asyncio
 import copy
+import gzip
+import json
 import ssl
 import sys
 from pathlib import Path
@@ -40,7 +42,10 @@ def ari(monkeypatch):
             raise response["error"]
         if "delay" in response:
             await asyncio.sleep(response["delay"])
-        return httpx.Response(response["status"], json=response.get("json"))
+        return httpx.Response(
+            response["status"], headers=response.get("headers", {}),
+            stream=httpx.ByteStream(response.get("raw", json.dumps(response.get("json")).encode())),
+        )
 
     def client(**kwargs):
         options.update(kwargs)
@@ -60,6 +65,7 @@ async def test_discovery_only_lists_endpoints_and_projects_safe_fields(ari):
     assert options["follow_redirects"] is False
     assert options["verify"] is True
     assert calls[0].headers["authorization"].startswith("Basic ")
+    assert calls[0].headers["accept-encoding"] == "identity"
     assert result.model_dump()["endpoints"] == [
         {"technology": "PJSIP", "resource": "0012", "state": "online"},
         {"technology": "PJSIP", "resource": "carrier-trunk", "state": "offline"},
@@ -119,6 +125,38 @@ async def test_payload_and_count_limits(ari, monkeypatch):
     assert error.value.detail["category"] == "too_large"
     monkeypatch.setattr(discovery, "MAX_RESPONSE_BYTES", 1024 * 1024)
     monkeypatch.setattr(discovery, "MAX_ENDPOINTS", 1)
+    with pytest.raises(discovery.HTTPException) as error:
+        await discovery.discover_endpoints(CONNECTION)
+    assert error.value.detail["category"] == "too_large"
+
+
+@pytest.mark.asyncio
+async def test_compressed_inventory_is_rejected_without_decompression(ari, monkeypatch):
+    calls, _, response = ari
+    # A small gzip payload expands well beyond the configured inventory budget.
+    response.update(headers={"Content-Encoding": "gzip"}, raw=gzip.compress(b" " * (2 * discovery.MAX_RESPONSE_BYTES)))
+    assert len(response["raw"]) < discovery.MAX_RESPONSE_BYTES
+
+    async def forbidden_decode(*args, **kwargs):
+        raise AssertionError("Discovery must never decode compressed content")
+        yield  # Async iterator contract.
+
+    monkeypatch.setattr(httpx.Response, "aiter_bytes", forbidden_decode)
+    with pytest.raises(discovery.HTTPException) as error:
+        await discovery.discover_endpoints(CONNECTION)
+    assert error.value.detail["category"] == "invalid_response"
+    assert calls[0].headers["accept-encoding"] == "identity"
+
+
+@pytest.mark.asyncio
+async def test_raw_inventory_limit_handles_exact_boundary_and_multiple_chunks(ari, monkeypatch):
+    response = ari[2]
+    # Cross the raw iterator's 64 KiB chunk boundary with valid JSON whitespace.
+    raw = b" " * 65536 + b"[]"
+    response.update(headers={"Content-Encoding": "identity"}, raw=raw)
+    monkeypatch.setattr(discovery, "MAX_RESPONSE_BYTES", len(raw))
+    assert (await discovery.discover_endpoints(CONNECTION)).endpoints == []
+    monkeypatch.setattr(discovery, "MAX_RESPONSE_BYTES", len(raw) - 1)
     with pytest.raises(discovery.HTTPException) as error:
         await discovery.discover_endpoints(CONNECTION)
     assert error.value.detail["category"] == "too_large"

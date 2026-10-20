@@ -104,15 +104,21 @@ async def discover_endpoints(settings: dict) -> EndpointDiscoveryResult:
             timeout=httpx.Timeout(DISCOVERY_TIMEOUT_SECONDS, connect=3.0),
             verify=settings.get("ssl_verify", True), follow_redirects=False,
         ) as client:
-            async with client.stream("GET", url, auth=(settings["username"], settings["password"])) as response:
+            async with client.stream(
+                "GET", url, headers={"Accept-Encoding": "identity"},
+                auth=(settings["username"], settings["password"]),
+            ) as response:
                 if response.status_code != 200:
                     category = {401: "authentication", 403: "forbidden", 404: "unsupported"}.get(response.status_code, "upstream")
                     raise discovery_error(category)
+                # Never invoke HTTPX decompression before enforcing the byte limit.
+                if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+                    raise discovery_error("invalid_response")
                 body = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    body.extend(chunk)
-                    if len(body) > MAX_RESPONSE_BYTES:
+                async for chunk in response.aiter_raw(chunk_size=65536):
+                    if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
                         raise discovery_error("too_large")
+                    body.extend(chunk)
                 return bytes(body)
 
     try:

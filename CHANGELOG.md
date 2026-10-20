@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the existing Asterisk connection. Operators select endpoint candidates and
   confirm number, description, and dialplan context before staging destinations
   for Save & Apply. Discovery is bounded and read-only; manual destinations,
-  Agent resource policies, and active-call configuration remain intact.
+  Agent resource policies, and active-call configuration remain intact. Raw response
+  limits are enforced before buffering, with compressed inventories rejected.
 
 - **Microsoft Calendar:** opt-in, calendar-backed Teams meetings with separate
   Teams join and Outlook event links, capability verification, caller-confirmed
