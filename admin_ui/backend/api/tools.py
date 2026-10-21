@@ -20,9 +20,17 @@ from string import Formatter
 from urllib.parse import urlparse, urljoin
 from settings import get_setting
 from . import config as config_api
+from services.ari_endpoint_discovery import DestinationReview, validate_additions
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.post("/transfer-destinations/validate")
+async def review_transfer_destinations(review: DestinationReview):
+    """Validate reviewed additions against the current draft, without saving."""
+    return validate_additions(review)
+
 
 # Default test values for template variables
 DEFAULT_TEST_VALUES = {

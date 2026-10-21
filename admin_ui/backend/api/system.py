@@ -3704,6 +3704,15 @@ async def test_ari_connection(request: AriTestRequest):
         }
 
 
+@router.get("/ari/endpoints")
+async def ari_endpoint_discovery():
+    """Read-only candidates from the configured ARI server; never alters calls."""
+    from services.ari_endpoint_discovery import discover_endpoints
+
+    connection_settings = await asyncio.to_thread(_ari_env_settings)
+    return await discover_endpoints(connection_settings)
+
+
 @router.get("/ari/extension-status", response_model=AriExtensionStatusResponse)
 async def ari_extension_status(key: str = "", device_state_tech: str = "auto", dial_string: str = ""):
     """
