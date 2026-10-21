@@ -75,6 +75,84 @@ function postedConfig() {
     return yaml.load((call?.[1] as { content: string }).content) as ReturnType<typeof fixture>;
 }
 
+describe('ARI assisted destination setup', () => {
+    async function stageDiscoveredDestination() {
+        await open('Transfer & live agents');
+        fireEvent.click(screen.getByRole('button', { name: 'Discover endpoints' }));
+        fireEvent.click(await screen.findByRole('checkbox', { name: 'Select PJSIP/0012' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Review selected (1)' }));
+        fireEvent.change(screen.getByLabelText('Description / label'), { target: { value: 'Sales team' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add to configuration' }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    }
+
+    beforeEach(() => {
+        vi.mocked(axios.get).mockImplementation(async url => ({
+            data: url === '/api/system/ari/endpoints'
+                ? { endpoints: [{ technology: 'PJSIP', resource: '0012', state: 'offline' }], discovered_at: '2026-10-20T10:00:00Z' }
+                : { tools: [], providers: [] },
+        }));
+    });
+
+    it('discovers, reviews, stages, saves/applies and reopens while preserving unrelated YAML and manual configuration', async () => {
+        const { unmount } = render(<ToolsPage />);
+        await stageDiscoveredDestination();
+        expect(vi.mocked(axios.post).mock.calls.map(([url]) => url)).toEqual(['/api/tools/transfer-destinations/validate']);
+        expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Back to tools' }));
+        await editFarewell();
+        fireEvent.click(screen.getByRole('button', { name: 'Save & Apply' }));
+        await screen.findByText(/Applied as tool generation 9/);
+        const expected = fixture();
+        (expected.tools.transfer.destinations as Record<string, unknown>).ext_0012 = { type: 'extension', target: '0012', description: 'Sales team', dialplan_context: 'from-internal', attended_allowed: false };
+        expected.tools.hangup_call.farewell_message = 'See you soon.';
+        expect(postedConfig()).toEqual(expected);
+        expect(vi.mocked(axios.post).mock.calls.map(([url]) => url)).toEqual([
+            '/api/tools/transfer-destinations/validate', '/api/config/yaml', '/api/system/containers/ai_engine/reload',
+        ]);
+        unmount();
+        mocks.load.mockResolvedValue({ config: postedConfig(), yamlError: null });
+        render(<ToolsPage />);
+        await open('Transfer & live agents');
+        expect(screen.getByText('ext_0012')).toBeInTheDocument();
+        expect(screen.getByText('reception')).toBeInTheDocument();
+        expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+    });
+
+    it('supports discovery with transfer disabled and never enables it or creates Live Agents', async () => {
+        const config = fixture();
+        config.tools.transfer.enabled = false;
+        mocks.load.mockResolvedValue({ config, yamlError: null });
+        render(<ToolsPage />);
+        await stageDiscoveredDestination();
+        fireEvent.click(screen.getByRole('button', { name: 'Save & Apply' }));
+        await screen.findByText(/Applied as tool generation 9/);
+        expect(postedConfig().tools.transfer.enabled).toBe(false);
+        expect((postedConfig().tools as Record<string, unknown>).extensions).toBeUndefined();
+        expect(postedConfig().tools.attended_transfer).toEqual(config.tools.attended_transfer);
+    });
+
+    it('retains staged destinations after save failure and distinguishes a saved but unapplied configuration', async () => {
+        render(<ToolsPage />);
+        await stageDiscoveredDestination();
+        vi.mocked(axios.post).mockImplementation(async url => {
+            if (url === '/api/config/yaml') throw new Error('save failed');
+            return { data: {} };
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Save & Apply' }));
+        await screen.findByText('Tools were not saved.');
+        expect(screen.getByText('ext_0012')).toBeInTheDocument();
+        expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+        vi.mocked(axios.post).mockImplementation(async url => {
+            if (url === '/api/system/containers/ai_engine/reload') throw new Error('apply failed');
+            return { data: { recommended_apply_method: 'hot_reload' } };
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Save & Apply' }));
+        await screen.findByText('Saved changes could not be applied; the previous tool generation remains active.');
+        expect(screen.getByText('ext_0012')).toBeInTheDocument();
+    });
+});
+
 describe('Tools list and dedicated editors', () => {
     it('starts with a compact list and preserves the full config through editing, navigation and Save & Apply', async () => {
         render(<ToolsPage />);

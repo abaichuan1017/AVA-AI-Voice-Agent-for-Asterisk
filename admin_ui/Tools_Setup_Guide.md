@@ -21,6 +21,13 @@ status, and Live Agents are grouped under **Transfer & live agents**. Expand
 **Advanced transfer settings — routing and timing** for technical overrides;
 expanding or collapsing it never changes configuration.
 
+Inside **Transfer & live agents → Destinations**, **Discover endpoints** uses
+the configured ARI connection to assist setup. Select candidates, confirm each
+number/name/context, and **Add to configuration** before **Save & Apply**.
+Discovery does not enable tools, create Live Agents, or place calls. Manual
+destinations remain supported. See the
+[endpoint discovery guide](../docs/ARI-Endpoint-Discovery.md).
+
 **Tool defaults** contains the shared caller identity and action timeout.
 **Catalog** remains a read-only reference to registered engine schemas (including
 MCP tools), not a list of the tools assigned to an individual Agent. Enablement
