@@ -544,3 +544,48 @@ async def test_pacer_cancels_pending_greeting_and_cleans_full_queue_on_transfer(
     assert session.greeting_media.phase == 'cancelled'
     assert 'stop' not in manager.active_streams
     manager._send_audio_chunk.assert_not_awaited()
+
+
+@pytest.mark.parametrize('transport', ['audiosocket', 'externalmedia'])
+@pytest.mark.parametrize('kind', ['greeting', 'pipeline-tts-greeting'])
+@pytest.mark.parametrize('close_queue', [True, False])
+@pytest.mark.asyncio
+async def test_failed_preroll_collects_full_greeting_and_releases_stream_gating(transport, kind, close_queue):
+    """A failed first silence send must not strand the producer behind its pacer."""
+    store = SessionStore()
+    session = CallSession(call_id='fallback', caller_channel_id='fallback', audiosocket_conn_id='conn', external_media_id='rtp-leg')
+    await store.upsert_call(session)
+    playback = AsyncMock(return_value='fallback-file')
+    manager = StreamingPlaybackManager(store, Mock(), audio_transport=transport, streaming_config={
+        'greeting_media_ready_delay_ms': 40, 'greeting_media_ready_timeout_ms': 100,
+        'fallback_timeout_ms': 50,
+        'jitter_buffer_ms': 40, 'provider_grace_ms': 0, 'normalizer': {'enabled': False}, 'attack_ms': 0,
+    }, fallback_playback_manager=SimpleNamespace(play_audio=playback))
+    manager._send_audio_chunk = AsyncMock(return_value=False)
+    manager.note_greeting_media_rx(session, transport, 'conn' if transport == 'audiosocket' else 'rtp-leg')
+    queue = asyncio.Queue(maxsize=2)
+    sid = await manager.start_streaming_playback('fallback', queue, playback_type=kind,
+                                                 source_encoding='ulaw', source_sample_rate=8000)
+    info = manager.active_streams['fallback']
+    chunks = [bytes([i + 1]) * 160 for i in range(20)]
+
+    async def produce():
+        for chunk in chunks:
+            await queue.put(chunk)
+        if close_queue:
+            await queue.put(None)
+
+    producer = asyncio.create_task(produce())
+    try:
+        await asyncio.wait_for(asyncio.gather(producer, info['pacer_task']), timeout=2)
+        await asyncio.gather(info['streaming_task'], return_exceptions=True)
+        playback.assert_awaited_once()
+        assert playback.await_args.args == ('fallback', b''.join(chunks), 'streaming-fallback')
+        assert 'fallback' not in manager.active_streams
+        assert not session.tts_tokens
+        assert session.audio_capture_enabled
+    finally:
+        producer.cancel()
+        await asyncio.gather(producer, return_exceptions=True)
+        if 'fallback' in manager.active_streams:
+            await manager.stop_streaming_playback('fallback')

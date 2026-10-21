@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancelled greetings cannot emit stale audio or start fallback playback.
   Bounded prefetch during readiness/silence keeps greeting queues draining to
   avoid dropping provider chunks or stalling pipeline synthesis.
+  On a failed pre-roll send, bounded fallback collection preserves queued
+  greeting audio and releases the streaming producer and its gating token.
 
 - **Microsoft Calendar:** opt-in, calendar-backed Teams meetings with separate
   Teams join and Outlook event links, capability verification, caller-confirmed

@@ -1151,6 +1151,13 @@ class StreamingPlaybackManager:
                 )
                 raise asyncio.CancelledError
 
+            if stream_info and stream_info.get('greeting_fallback_owner'):
+                # The failed greeting's pacer drains source chunks for file
+                # fallback and then stops this exact stream. Waiting for that
+                # pacer here would create a producer/consumer cleanup cycle.
+                stream_info['producer_closed'] = True
+                return
+
             # Flush any pending byte counters on all exit paths (M9 fix)
             if bytes_since_last_upsert > 0:
                 try:
@@ -1270,13 +1277,24 @@ class StreamingPlaybackManager:
                         if self.websocket_server:
                             await self._selected_output_transport().abort_output(call_id)
                         break
+                    failed_info = self.active_streams.get(call_id)
+                    guarded = bool(failed_info and failed_info.get('greeting_media_guard'))
+                    if guarded:
+                        failed_info['greeting_fallback_owner'] = True
                     try:
                         await self._record_fallback(call_id, "transport-failure")
                         await self._fallback_to_file_playback(call_id, stream_id)
-                        if call_id in self.active_streams:
-                            self.active_streams[call_id]['end_reason'] = 'transport-failure'
-                    except Exception:
-                        pass
+                        if failed_info is not None and self.active_streams.get(call_id) is failed_info:
+                            failed_info['end_reason'] = 'transport-failure'
+                    finally:
+                        if (
+                            guarded and self.active_streams.get(call_id) is failed_info
+                            and not failed_info.get('stop_requested')
+                        ):
+                            # File playback owns its own gating token. Release
+                            # the failed stream's producer and token even when
+                            # the upstream greeting has not closed its queue.
+                            await self.stop_streaming_playback(call_id)
                     break
                 self._update_idle_tracking(call_id, status)
                 if self._should_stop_for_idle(call_id, stream_id, jitter_buffer):
@@ -3673,12 +3691,44 @@ class StreamingPlaybackManager:
                 pass
             if call_id in self.jitter_buffers:
                 jitter_buffer = self.jitter_buffers[call_id]
-                while not jitter_buffer.empty():
-                    chunk = jitter_buffer.get_nowait()
-                    # Skip sentinel objects and non-bytes data
+                collect_live = bool(guard and info.get('greeting_fallback_owner'))
+                deadline = time.monotonic() + max(0.5, min(10.0, self.fallback_timeout_ms / 1000.0))
+                while True:
+                    if collect_live and time.monotonic() >= deadline:
+                        break
+                    try:
+                        chunk = jitter_buffer.get_nowait()
+                    except asyncio.QueueEmpty:
+                        if not collect_live or info.get('producer_closed'):
+                            break
+                        timeout = deadline - time.monotonic()
+                        if timeout <= 0:
+                            break
+                        try:
+                            chunk = await asyncio.wait_for(jitter_buffer.get(), timeout=timeout)
+                        except asyncio.TimeoutError:
+                            break
+                    if collect_live:
+                        session = await self.session_store.get_by_call_id(call_id)
+                        if (
+                            self.active_streams.get(call_id) is not info
+                            or not self._greeting_media_owner_current(session, info)
+                        ):
+                            return
                     if chunk is _JITTER_SENTINEL:
+                        if collect_live:
+                            info['sentinel_seen'] = True
+                            break
+                        continue
+                    if isinstance(chunk, _TransportBoundary):
+                        if collect_live:
+                            if not chunk.completed.done():
+                                chunk.completed.set_result(False)
+                            break
                         continue
                     if chunk and isinstance(chunk, (bytes, bytearray)):
+                        if collect_live and len(remaining_audio) + len(chunk) > 8 * 1024 * 1024:
+                            raise ValueError("Greeting fallback audio exceeds the bounded collection limit")
                         remaining_audio.extend(chunk)
                         self._decrement_buffered_bytes(call_id, len(chunk))
             
