@@ -467,6 +467,54 @@ Controls the pacing and robustness of streamed agent audio.
 - streaming.egress_force_mulaw: When true, converts outbound streaming audio to μ-law 8 kHz regardless of provider encoding.
 - streaming.greeting_rtp_wait_ms: ExternalMedia-only. How long to wait (ms) for the remote RTP endpoint to be discovered during the initial greeting before falling back to file playback (prevents “dead air until caller speaks” in some Asterisk setups).
 
+### Initial greeting media readiness
+
+Advanced Settings → Streaming exposes an optional initial-greeting guard for
+AudioSocket and ExternalMedia **streaming**, for full-agent and pipeline greetings:
+
+```yaml
+streaming:
+  greeting_media_ready_delay_ms: 0       # integer 0..2000; default 0 (disabled)
+  greeting_media_ready_timeout_ms: 1000  # integer 0..5000; default 1000
+```
+
+Delay **0 bypasses the entire guard**, including the readiness check. Existing
+installations retain their current timing without adding these keys. With a
+positive delay, the first prepared greeting frame starts one monotonic readiness
+deadline. Valid inbound audio, including silence, confirms the media path for the
+same live call and connection; the caller need not speak. ARI answer, bridge
+creation, socket connection, and talk detection alone are insufficient.
+
+After readiness, the engine sends the configured number of milliseconds of paced,
+correctly encoded silence before the greeting. Timeout **0** checks immediately:
+if ready it sends that silence; otherwise it resumes existing playback/fallback
+immediately. A positive timeout bounds waiting, then resumes that same existing
+path without an additional readiness retry or replaying the greeting. The delay
+and timeout do not apply again to later chunks or responses. Stop, hangup,
+transfer, or lost output ownership cancels pending work, including output and
+fallback that have not yet started after an asynchronous session lookup.
+During the hold, the pacer continues consuming queued speech into a bounded
+prefetch buffer at its normal cadence. The additional buffer is limited to the
+configured timeout plus delay window and one prepared frame; a single converted
+source chunk may cross that limit. Further audio uses the existing bounded
+upstream queues until playback resumes. Sentinels and transport boundaries keep
+their order.
+
+Values must be whole-number YAML integers; strings, booleans, fractions, negatives,
+and values above the ranges are rejected. Larger settings trade greeting latency
+for settling time; inbound readiness is not proof of audibility at the handset.
+This does not repair missing inbound audio throughout a call.
+
+Save preserves unrelated YAML and does not restart services. Streaming changes
+require an AI Engine restart; apply them after active calls finish. Set delay back
+to **0**, save, and restart after calls finish to disable the feature. WebSocket,
+explicit file playback, and existing file fallback remain unchanged. Existing
+Greeting Min Start/Greeting RTP Wait controls (#754) and transfer handoff are
+separate work.
+
+Transport contracts: [Asterisk AudioSocket protocol](https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/)
+and [Python monotonic loop time](https://docs.python.org/3.11/library/asyncio-eventloop.html#asyncio.loop.time).
+
 ## VAD (Voice Activity Detection)
 
 Defines how inbound speech is segmented into utterances for STT.

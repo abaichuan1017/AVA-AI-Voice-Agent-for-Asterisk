@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Initial greeting readiness (#752):** opt-in AudioSocket/ExternalMedia streaming
+  guard with bounded inbound-media waiting and paced silence before the first
+  greeting. Admin Streaming controls preserve YAML values and require a deliberate
+  restart after calls finish. Delay zero preserves existing timing; file playback,
+  WebSocket, existing greeting controls, and transfer handoff remain unchanged.
+  Recheck guard ownership after asynchronous output/fallback session lookups so
+  cancelled greetings cannot emit stale audio or start fallback playback.
+  Bounded prefetch during readiness/silence keeps greeting queues draining to
+  avoid dropping provider chunks or stalling pipeline synthesis.
+  On a failed pre-roll send, bounded fallback collection preserves queued
+  greeting audio and releases the streaming producer and its gating token.
 - **ARI endpoint discovery (#753):** assisted transfer destination setup through
   the existing Asterisk connection. Operators select endpoint candidates and
   confirm number, description, and dialplan context before staging destinations
