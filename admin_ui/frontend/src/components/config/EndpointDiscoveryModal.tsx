@@ -125,7 +125,7 @@ export default function EndpointDiscoveryModal({ transfer, onClose, onAdd }: Pro
                     Connection settings saved in Asterisk settings may differ from those currently used by the AI Engine.
                 </p>
                 {error && <div role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-                    {error} {!rows && <a className="underline" href="/asterisk">Open Asterisk settings</a>}
+                    {error} {!rows && <a className="underline" href="/asterisk" target="_blank" rel="noopener noreferrer">Open Asterisk settings</a>}
                 </div>}
                 {!rows ? <>
                     <div className="flex flex-wrap items-center justify-between gap-3">
