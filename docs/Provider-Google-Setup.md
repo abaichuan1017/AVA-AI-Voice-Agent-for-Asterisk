@@ -51,6 +51,9 @@ Planned turnover waits for a resumable checkpoint and completed tools, bounded b
 `goAway.timeLeft`. An unexpected disconnect without a currently safe checkpoint
 (for example during generation or a tool call) follows terminal disconnect
 handling; retaining an older handle does not prove it is safe to replay.
+Non-resumable updates revoke the saved checkpoint. Recovery rechecks safety
+after notifying the engine and before sending resumed setup; invalidation follows
+terminal handling instead of resuming stale context or starting a fresh chat.
 Authentication, schema and quota failures are not blindly retried. Caller
 hangup, farewell and transfer ownership take precedence over recovery.
 An attended-transfer decision retains ownership through bridge completion or

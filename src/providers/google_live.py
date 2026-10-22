@@ -234,6 +234,9 @@ class GoogleLiveProvider(AIProviderInterface):
         self._recovery_ready = asyncio.Event()
         self._recovery_ready.set()
         self._resume_handle: Optional[str] = None
+        # A revoked handle may still appear in a subsequent close reason.
+        # Keep it only for redaction, never as recovery input, until teardown.
+        self._redaction_resume_handle: Optional[str] = None
         self._session_resumable = False
         self._setup_snapshot: Optional[Dict[str, Any]] = None
         self._recovery_audio = bytearray()
@@ -853,6 +856,7 @@ class GoogleLiveProvider(AIProviderInterface):
             context: Optional context including system prompt, tools, etc.
         """
         self._resume_handle = None
+        self._redaction_resume_handle = None
         self._session_resumable = False
         self._setup_snapshot = None
         self._recovery_audio.clear()
@@ -1134,8 +1138,8 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _send_setup(self, context: Optional[Dict[str, Any]]) -> None:
         """Send session setup message to Gemini Live API."""
         if self._recovering:
-            if not self._setup_snapshot or not self._resume_handle:
-                raise ValueError("Google Live resumption requires a checkpoint")
+            if not self._setup_snapshot or not self._safe_checkpoint():
+                raise ValueError("Google Live resumption requires a safe checkpoint")
             setup_msg = copy.deepcopy(self._setup_snapshot)
             setup_msg["setup"]["sessionResumption"] = {"handle": self._resume_handle}
             if not await self._send_message(setup_msg):
@@ -1618,7 +1622,7 @@ class GoogleLiveProvider(AIProviderInterface):
         await self._emit_provider_disconnected(code=code, reason=reason)
 
     def _redact_close_reason(self, reason: str) -> str:
-        for secret in (self._resume_handle, self.config.api_key):
+        for secret in (self._resume_handle, self._redaction_resume_handle, self.config.api_key):
             if secret:
                 reason = reason.replace(secret, "<redacted>")
         return reason
@@ -1636,6 +1640,9 @@ class GoogleLiveProvider(AIProviderInterface):
             self._session_resumable = update.get("resumable") is True and isinstance(handle, str) and bool(handle)
             if self._session_resumable:
                 self._resume_handle = handle
+                self._redaction_resume_handle = handle
+            else:
+                self._resume_handle = None
         message_type = None
         
         # Determine message type
@@ -1668,8 +1675,8 @@ class GoogleLiveProvider(AIProviderInterface):
         elif message_type == "toolCall":
             # Setup ACK and recovery admission must finish before a new socket
             # may cause external effects (including legacy serial tool calls).
-            await self._recovery_ready.wait()
             self._session_resumable = False
+            await self._recovery_ready.wait()
             calls = []
             for call in (data.get("toolCall") or {}).get("functionCalls", []):
                 cached = self._tool_response_cache.get(call.get("id"))
@@ -2942,8 +2949,8 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _resume_transport(self) -> None:
         for attempt in range(1, self.config.session_recovery_max_attempts + 1):
-            if not await self._recovery_allowed():
-                raise RuntimeError("Call no longer owns Google recovery")
+            if not await self._recovery_allowed() or not self._safe_checkpoint():
+                raise RuntimeError("Call no longer has a safe Google checkpoint")
             try:
                 self._last_close_code, self._last_close_reason = None, ""
                 await self._connect_session()
@@ -2981,6 +2988,11 @@ class GoogleLiveProvider(AIProviderInterface):
                 if self.on_event:
                     notified = True
                     await self.on_event({"type": "ProviderSessionRecovery", "call_id": self._call_id, "active": True})
+                # The old reader remains live during the engine notification.
+                # Generation, tool requests, or revocation can invalidate the
+                # checkpoint while that callback yields.
+                if not self._safe_checkpoint():
+                    raise RuntimeError("Google checkpoint invalidated during recovery admission")
                 await self._discard_connection()
                 # Partial pre-close input is not replayed into a checkpoint.
                 self._input_buffer.clear()
@@ -3227,6 +3239,7 @@ class GoogleLiveProvider(AIProviderInterface):
         finally:
             # Clear evidence after background callbacks have stopped.
             self._resume_handle = None
+            self._redaction_resume_handle = None
             self._setup_snapshot = None
             self._tool_response_cache.clear()
             self._session_resumable = False

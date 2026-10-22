@@ -170,16 +170,69 @@ async def test_permanent_errors_do_not_reconnect(monkeypatch, code, reason):
         await provider.stop_session()
 
 
-async def test_false_checkpoint_retains_handle_but_refuses_lossy_resume(monkeypatch):
+async def test_false_checkpoint_clears_handle_and_refuses_lossy_resume(monkeypatch):
     provider, opened = await start(monkeypatch, [Socket()])
     try:
         await provider._handle_server_message({"sessionResumptionUpdate": {"resumable": False, "newHandle": ""}})
-        assert provider._resume_handle == "checkpoint"
+        assert provider._resume_handle is None
+        assert "checkpoint" not in provider._redact_close_reason("Rejected checkpoint")
         await opened[0].end(1006)
         await provider._receive_task
         assert len(opened) == 1
         assert len(disconnects(provider)) == 1
     finally:
+        await provider.stop_session()
+
+
+@pytest.mark.parametrize("message", [
+    {"sessionResumptionUpdate": {"resumable": False, "newHandle": ""}},
+    {"serverContent": {"modelTurn": {"parts": [{"text": "new output"}]}}},
+    {"toolCall": {"functionCalls": [{"id": "new-write", "name": "google_calendar", "args": {}}]}},
+])
+async def test_checkpoint_invalidation_during_recovery_notification_fails_closed(monkeypatch, message):
+    provider, opened = await start(monkeypatch, [Socket(), Socket()])
+    admitted, release = asyncio.Event(), asyncio.Event()
+    provider._handle_server_content = AsyncMock()
+    provider._handle_tool_call = AsyncMock()
+
+    async def notify(event):
+        if event["type"] == "ProviderSessionRecovery" and event["active"]:
+            admitted.set()
+            await release.wait()
+
+    provider.on_event = AsyncMock(side_effect=notify)
+    try:
+        await provider._handle_go_away({"goAway": {"timeLeft": "5s"}})
+        await asyncio.wait_for(admitted.wait(), 1)
+        # Deliver through the actual old receive loop while admission yields.
+        await opened[0].messages.put(message)
+        await spin_until(lambda: not provider._session_resumable)
+        release.set()
+        await recover(provider)
+        assert len(opened) == 1  # neither stale resumption nor a fresh session
+        assert len(disconnects(provider)) == 1
+        provider._handle_tool_call.assert_not_awaited()
+        assert provider.websocket is None
+    finally:
+        release.set()
+        await provider.stop_session()
+
+
+@pytest.mark.parametrize("missing_handle", [False, True])
+async def test_resumed_setup_requires_a_currently_safe_checkpoint(monkeypatch, missing_handle):
+    provider, _ = await start(monkeypatch, [Socket()])
+    provider._recovering = True
+    if missing_handle:
+        provider._resume_handle = None
+    else:
+        provider._session_resumable = False
+    provider._send_message = AsyncMock(return_value=True)
+    try:
+        with pytest.raises(ValueError, match="safe checkpoint"):
+            await provider._send_setup(None)
+        provider._send_message.assert_not_awaited()
+    finally:
+        provider._recovering = False
         await provider.stop_session()
 
 
@@ -243,6 +296,7 @@ async def test_stop_cancels_inflight_recovery_and_clears_handles(monkeypatch):
     await provider.stop_session()
     assert provider._closed
     assert provider._resume_handle is None
+    assert provider._redaction_resume_handle is None
     assert not sockets[1].open
     assert not disconnects(provider)
     assert not any(not task.done() and task.get_name().startswith("google-live-")
