@@ -28,6 +28,7 @@ import time
 import struct
 import audioop
 import re
+import uuid
 from typing import AbstractSet, Any, Dict, Optional, List, Tuple
 from collections import deque
 
@@ -2398,8 +2399,8 @@ class GoogleLiveProvider(AIProviderInterface):
             # Stop the watchdog from double-firing.
             self._hangup_fallback_emitted = True
 
-    async def _handle_tool_call(self, data: Dict[str, Any]) -> None:
-        """Handle toolCall message."""
+    async def _handle_tool_call(self, data: Dict[str, Any], *, _tracking_id: Optional[str] = None) -> None:
+        """Execute tool calls; an optional local tracking id never enters the wire payload."""
         owner_call_id = self._call_id
         if self._closing or self._closed or self._disconnect_emitted or self._long_audio_transport_failed or not owner_call_id:
             return
@@ -2475,8 +2476,9 @@ class GoogleLiveProvider(AIProviderInterface):
                     # Protect only a tool that has entered actual execution.
                     # A task still checking allowlists is safe to cancel during
                     # teardown; it must not begin a transfer after shutdown.
-                    if call_id is not None:
-                        self._active_tool_call_ids.add(call_id)
+                    active_id = _tracking_id or call_id
+                    if active_id is not None:
+                        self._active_tool_call_ids.add(active_id)
                     result = await self._tool_adapter.execute_tool(
                         func_name,
                         func_args,
@@ -2752,10 +2754,19 @@ class GoogleLiveProvider(AIProviderInterface):
         """Keep legacy ordering, shielding entered writes from reader cancellation."""
         for call in (data.get("toolCall") or {}).get("functionCalls", []):
             tool_id = call.get("id")
-            if not tool_id or tool_id in self._seen_tool_call_ids:
+            if tool_id and tool_id in self._seen_tool_call_ids:
                 continue
-            self._seen_tool_call_ids.add(tool_id)
-            task = asyncio.create_task(self._handle_tool_call({"toolCall": {"functionCalls": [call]}}))
+            tracking_kwargs = {}
+            if tool_id:
+                self._seen_tool_call_ids.add(tool_id)
+            else:
+                # Legacy Vertex calls may omit ids. Keep the wire payload and
+                # recorder id unchanged while protecting entered writes locally.
+                tool_id = f"anonymous-{uuid.uuid4().hex}"
+                tracking_kwargs["_tracking_id"] = tool_id
+            task = asyncio.create_task(self._handle_tool_call(
+                {"toolCall": {"functionCalls": [call]}}, **tracking_kwargs,
+            ))
             self._tool_call_tasks[tool_id] = task
             self._tool_call_names[tool_id] = call.get("name") or ""
 

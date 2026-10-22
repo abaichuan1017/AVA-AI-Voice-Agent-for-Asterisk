@@ -54,7 +54,8 @@ handling; retaining an older handle does not prove it is safe to replay.
 Authentication, schema and quota failures are not blindly retried. Caller
 hangup, farewell and transfer ownership take precedence over recovery.
 An attended-transfer decision retains ownership through bridge completion or
-abort cleanup, including caller-facing prompts. Disconnect handling also waits
+abort cleanup, including caller-facing prompts. Predial routing retains ownership
+from destination setup, before deferred-transfer state is recorded. Disconnect handling also waits
 for deferred routing to resolve within its bounded observation window; if the
 transfer fails and returns ownership to the AI, the dead provider follows terminal
 disconnect handling rather than leaving the call silent.

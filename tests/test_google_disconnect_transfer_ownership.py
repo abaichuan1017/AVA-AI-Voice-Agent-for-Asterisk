@@ -34,9 +34,14 @@ async def test_decision_retains_owner_until_bridge_or_abort_cleanup(decision):
 
 
 @pytest.mark.parametrize("routed", [False, True])
-async def test_deferred_disconnect_observer_survives_until_routing_outcome(routed):
+@pytest.mark.parametrize("owner", ["deferred", "predial"])
+async def test_disconnect_observer_survives_until_routing_outcome(routed, owner):
     engine, session = bare_engine(provider(enabled=False))
-    session.pending_deferred_transfer = {"id": "synthetic-action"}
+    if owner == "deferred":
+        session.pending_deferred_transfer = {"id": "synthetic-action"}
+    else:
+        session.current_action = {"type": "predial_transfer", "answered": False}
+        assert session.pending_deferred_transfer is None
     session.provider_session_active = True
     await engine.session_store.upsert_call(session)
     await engine.on_provider_event({"type": "ProviderDisconnected", "call_id": session.call_id, "code": 1006})
@@ -47,6 +52,7 @@ async def test_deferred_disconnect_observer_survives_until_routing_outcome(route
         assert session.provider_session_active
         assert not worker.done()
         session.pending_deferred_transfer = None
+        session.current_action = None
         session.transfer_active = routed
         await asyncio.wait_for(worker, 1)
         assert engine._terminate_call_after_audio.await_count == int(not routed)
@@ -58,20 +64,24 @@ async def test_deferred_disconnect_observer_survives_until_routing_outcome(route
 
 
 @pytest.mark.parametrize("phase", ["before", "during"])
-@pytest.mark.parametrize("decision", ["accepted", "declined"])
-async def test_terminal_drain_cannot_override_decision_owner(phase, decision):
+@pytest.mark.parametrize("action", [
+    {"type": "attended_transfer", "decision": "accepted"},
+    {"type": "attended_transfer", "decision": "declined"},
+    {"type": "predial_transfer", "answered": False},
+])
+async def test_terminal_drain_cannot_override_transfer_owner(phase, action):
     engine, session = bare_engine(provider())
     await engine.session_store.upsert_call(session)
     engine._terminate_call_after_audio = Engine._terminate_call_after_audio.__get__(engine)
     engine.ari_client = SimpleNamespace(hangup_channel=AsyncMock())
 
     async def drain(*args, **kwargs):
-        session.current_action = {"type": "attended_transfer", "decision": decision}
+        session.current_action = dict(action)
         return True
 
     engine._wait_for_call_audio_drain = AsyncMock(side_effect=drain)
     if phase == "before":
-        session.current_action = {"type": "attended_transfer", "decision": decision}
+        session.current_action = dict(action)
     assert not await engine._terminate_call_after_audio(session.call_id, reason="google_provider_disconnected", drain_timeout_cap_sec=8)
     engine.ari_client.hangup_channel.assert_not_awaited()
 

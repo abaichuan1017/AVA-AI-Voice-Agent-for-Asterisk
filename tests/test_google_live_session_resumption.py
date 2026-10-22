@@ -2,7 +2,8 @@
 import asyncio
 import base64
 import json
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from websockets.exceptions import ConnectionClosedError
@@ -321,6 +322,7 @@ async def test_duplicate_completed_tool_reuses_result_without_execution(monkeypa
     ("pending_deferred_transfer", {}), ("current_action", {"type": "attended_transfer"}),
     ("current_action", {"type": "attended_transfer", "decision": "accepted"}),
     ("current_action", {"type": "attended_transfer", "decision": "declined"}),
+    ("current_action", {"type": "predial_transfer"}),
 ])
 async def test_engine_recovery_guard_respects_routing_and_termination(field, value):
     engine = Engine.__new__(Engine)
@@ -488,6 +490,73 @@ async def test_legacy_entered_write_survives_goaway_deadline_and_reader_cancella
         assert len(opened) == 1
     finally:
         finish.set()
+        await provider.stop_session()
+
+
+@pytest.mark.parametrize("vertex", [False, True])
+@pytest.mark.parametrize("id_fields", [{}, {"id": ""}])
+async def test_legacy_idless_tools_execute_and_reply_without_local_ids(monkeypatch, vertex, id_fields):
+    provider, opened = await start(monkeypatch, [Socket()], llm_model="gemini-2.5-flash-native-audio-latest")
+    provider._vertex_active = vertex
+    registry = Mock()
+    registry.is_tool_allowed.return_value = True
+    registry.get.return_value = None
+    provider._tool_adapter = SimpleNamespace(registry=registry, execute_tool=AsyncMock(return_value={"status": "success"}))
+    provider._allowed_tools = ["google_calendar"]
+    recorder = AsyncMock()
+    monkeypatch.setattr("src.providers.google_live.record_in_call_tool_result", recorder)
+    call = {"name": "google_calendar", "args": {}, **id_fields}
+    try:
+        # No server id means these are distinct requests, not duplicate ids.
+        for _ in range(2):
+            await provider._handle_server_message({"toolCall": {"functionCalls": [call]}})
+        assert provider._tool_adapter.execute_tool.await_count == 2
+        replies = [m["toolResponse"]["functionResponses"][0] for m in opened[0].sent if "toolResponse" in m]
+        assert len(replies) == 2
+        assert all(r["name"] == "google_calendar" and r["response"]["status"] == "success" for r in replies)
+        assert all("id" not in r if vertex else r["id"] == id_fields.get("id") for r in replies)
+        assert all(c.kwargs["tool_call_id"] == id_fields.get("id") for c in recorder.await_args_list)
+        assert not provider._seen_tool_call_ids
+        assert not provider._tool_call_tasks
+        assert not provider._active_tool_call_ids
+    finally:
+        await provider.stop_session()
+
+
+@pytest.mark.parametrize("entered", [False, True])
+async def test_idless_tool_teardown_protects_only_entered_writes(monkeypatch, entered):
+    provider, _ = await start(monkeypatch, [Socket()], llm_model="gemini-2.5-flash-native-audio-latest")
+    provider.TOOL_DRAIN_GRACE_SEC = 0.01
+    paused, release = asyncio.Event(), asyncio.Event()
+
+    async def pause(*args, **kwargs):
+        paused.set()
+        await release.wait()
+        return {"status": "success"} if entered else None
+
+    registry = Mock()
+    registry.is_tool_allowed.return_value = True
+    registry.get.return_value = None
+    execute = AsyncMock(side_effect=pause) if entered else AsyncMock()
+    provider._tool_adapter = SimpleNamespace(registry=registry, execute_tool=execute)
+    provider._allowed_tools = ["google_calendar"]
+    monkeypatch.setattr("src.providers.google_live.record_in_call_tool_result", AsyncMock())
+    monkeypatch.setattr("src.tools.context.ToolExecutionContext.get_tool_block_response", AsyncMock(return_value=None) if entered else pause)
+    reader = asyncio.create_task(provider._handle_server_message({"toolCall": {"functionCalls": [{"name": "google_calendar", "args": {}}]}}))
+    await asyncio.wait_for(paused.wait(), 1)
+    task = next(iter(provider._tool_call_tasks.values()))
+    reader.cancel()
+    await asyncio.gather(reader, return_exceptions=True)
+    try:
+        await provider.stop_session()
+        assert task.cancelled() is (not entered)
+        if entered:
+            assert not task.done()
+        else:
+            execute.assert_not_awaited()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
         await provider.stop_session()
 
 

@@ -8333,12 +8333,12 @@ class Engine:
 
     @staticmethod
     def _session_has_transfer_owner(session: Optional[CallSession]) -> bool:
-        """A recorded decision does not finish attended-transfer routing."""
+        """Retain routing ownership from predial setup through transfer cleanup."""
         if not session:
             return False
         action = getattr(session, "current_action", None)
         return bool(
-            (isinstance(action, dict) and action.get("type") == "attended_transfer")
+            (isinstance(action, dict) and action.get("type") in {"attended_transfer", "predial_transfer"})
             or isinstance(getattr(session, "pending_deferred_transfer", None), dict)
         )
 
