@@ -211,7 +211,7 @@ async def test_checkpoint_invalidation_during_recovery_notification_fails_closed
         await recover(provider)
         assert len(opened) == 1  # neither stale resumption nor a fresh session
         assert len(disconnects(provider)) == 1
-        provider._handle_tool_call.assert_not_awaited()
+        provider._handle_tool_call.assert_not_called()
         assert provider.websocket is None
     finally:
         release.set()
@@ -230,7 +230,7 @@ async def test_resumed_setup_requires_a_currently_safe_checkpoint(monkeypatch, m
     try:
         with pytest.raises(ValueError, match="safe checkpoint"):
             await provider._send_setup(None)
-        provider._send_message.assert_not_awaited()
+        provider._send_message.assert_not_called()
     finally:
         provider._recovering = False
         await provider.stop_session()
