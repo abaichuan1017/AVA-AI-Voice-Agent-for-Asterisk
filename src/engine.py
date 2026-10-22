@@ -8332,6 +8332,17 @@ class Engine:
         return "basic_tts"
 
     @staticmethod
+    def _session_has_transfer_owner(session: Optional[CallSession]) -> bool:
+        """A recorded decision does not finish attended-transfer routing."""
+        if not session:
+            return False
+        action = getattr(session, "current_action", None)
+        return bool(
+            (isinstance(action, dict) and action.get("type") == "attended_transfer")
+            or isinstance(getattr(session, "pending_deferred_transfer", None), dict)
+        )
+
+    @staticmethod
     def _session_has_pending_attended_transfer(session: Optional[CallSession]) -> bool:
         if not session:
             return False
@@ -14125,8 +14136,7 @@ class Engine:
             session and not session.cleanup_in_progress
             and not session.cleanup_after_tts
             and not self._session_was_transferred(session)
-            and not self._session_has_pending_attended_transfer(session)
-            and not isinstance(getattr(session, "pending_deferred_transfer", None), dict)
+            and not self._session_has_transfer_owner(session)
             and call_id not in getattr(self, "_terminal_hangup_started", set())
             and (expected_provider is None
                  or getattr(self, "_call_providers", {}).get(call_id) is expected_provider)
@@ -14311,8 +14321,7 @@ class Engine:
                     return
                 google_disconnect_drain = bool(self._google_long_audio_provider(session)) or (
                     self._get_provider_kind(provider) == "google_live"
-                    and (self._session_has_pending_attended_transfer(session)
-                         or isinstance(getattr(session, "pending_deferred_transfer", None), dict))
+                    and self._session_has_transfer_owner(session)
                 )
                 if not google_disconnect_drain:
                     try:
@@ -15813,7 +15822,7 @@ class Engine:
             session = await self.session_store.get_by_call_id(call_id)
             if not session or session.cleanup_in_progress or self._session_was_transferred(session):
                 return
-            if self._session_has_pending_attended_transfer(session):
+            if self._session_has_transfer_owner(session):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     # The transfer owner must decide routing; a stalled action
@@ -15828,8 +15837,10 @@ class Engine:
                 call_id, reason="google_provider_disconnected", drain_timeout_cap_sec=8.0,
             )
             session = await self.session_store.get_by_call_id(call_id)
-            if session and self._session_has_pending_attended_transfer(session):
+            if session and self._session_has_transfer_owner(session):
                 continue
+            if not session or session.cleanup_in_progress or self._session_was_transferred(session):
+                return
             if session and not session.cleanup_in_progress:
                 session.provider_session_active = False
                 await self._save_session(session)
@@ -15869,8 +15880,7 @@ class Engine:
             if not session or bool(getattr(session, "cleanup_in_progress", False)):
                 return False
             if (self._session_was_transferred(session)
-                    or self._session_has_pending_attended_transfer(session)
-                    or isinstance(getattr(session, "pending_deferred_transfer", None), dict)):
+                    or self._session_has_transfer_owner(session)):
                 logger.info("Terminal hangup skipped during transfer", call_id=call_id, reason=reason)
                 return False
 
@@ -15902,7 +15912,7 @@ class Engine:
             session = await self.session_store.get_by_call_id(call_id)
             if not session or self._session_was_transferred(session):
                 return False
-            if isinstance(getattr(session, "pending_deferred_transfer", None), dict):
+            if self._session_has_transfer_owner(session):
                 started.discard(call_id)
                 return False
             if drain_timeout_cap_sec is not None and (

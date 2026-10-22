@@ -53,6 +53,11 @@ Planned turnover waits for a resumable checkpoint and completed tools, bounded b
 handling; retaining an older handle does not prove it is safe to replay.
 Authentication, schema and quota failures are not blindly retried. Caller
 hangup, farewell and transfer ownership take precedence over recovery.
+An attended-transfer decision retains ownership through bridge completion or
+abort cleanup, including caller-facing prompts. Disconnect handling also waits
+for deferred routing to resolve within its bounded observation window; if the
+transfer fails and returns ownership to the AI, the dead provider follows terminal
+disconnect handling rather than leaving the call silent.
 
 A short audio gap is possible. Only new caller audio arriving during replacement
 is buffered, with a bounded most-recent window; previously sent audio and old

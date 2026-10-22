@@ -3000,6 +3000,10 @@ class GoogleLiveProvider(AIProviderInterface):
                            active_tools=sum(not task.done() for task in self._tool_call_tasks.values()))
         finally:
             self._go_away_deadline = None
+            recovered = recovered and self._ws_is_open() and not self._closing and not self._closed
+            if not recovered:
+                await self._discard_connection()
+            self._recovering = False
             self._recovery_audio.clear()
             if notified and self.on_event:
                 with contextlib.suppress(Exception):
@@ -3007,7 +3011,6 @@ class GoogleLiveProvider(AIProviderInterface):
                         "type": "ProviderSessionRecovery", "call_id": self._call_id, "active": False,
                     }), timeout=1.0)
             recovered = recovered and self._ws_is_open() and not self._closing and not self._closed
-            self._recovering = False
             self._recovery_task = None
             if not recovered:
                 await self._discard_connection()

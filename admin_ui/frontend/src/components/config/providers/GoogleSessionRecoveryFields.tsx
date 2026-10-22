@@ -38,21 +38,21 @@ export default function GoogleSessionRecoveryFields({ config, onChange }: Props)
                         <input id="session_recovery_timeout_sec" type="number" min={0.1} max={30} step={0.1}
                             className="mt-1 w-full rounded-md border border-input bg-background p-2"
                             value={config.session_recovery_timeout_sec ?? 10}
-                            onChange={(event) => onChange('session_recovery_timeout_sec', Number(event.target.value))} />
+                            onChange={(event) => onChange('session_recovery_timeout_sec', event.target.value ? Number(event.target.value) : 10)} />
                     </div>
                     <div>
                         <label htmlFor="session_recovery_max_attempts" className="text-xs">Maximum attempts</label>
                         <input id="session_recovery_max_attempts" type="number" min={1} max={3}
                             className="mt-1 w-full rounded-md border border-input bg-background p-2"
                             value={config.session_recovery_max_attempts ?? 2}
-                            onChange={(event) => onChange('session_recovery_max_attempts', Number(event.target.value))} />
+                            onChange={(event) => onChange('session_recovery_max_attempts', event.target.value ? Number(event.target.value) : 2)} />
                     </div>
                     <div>
                         <label htmlFor="session_recovery_audio_buffer_ms" className="text-xs">Caller audio buffer (milliseconds)</label>
                         <input id="session_recovery_audio_buffer_ms" type="number" min={0} max={2000} step={20}
                             className="mt-1 w-full rounded-md border border-input bg-background p-2"
                             value={config.session_recovery_audio_buffer_ms ?? 1000}
-                            onChange={(event) => onChange('session_recovery_audio_buffer_ms', Number(event.target.value))} />
+                            onChange={(event) => onChange('session_recovery_audio_buffer_ms', event.target.value ? Number(event.target.value) : 1000)} />
                     </div>
                 </div>
             )}

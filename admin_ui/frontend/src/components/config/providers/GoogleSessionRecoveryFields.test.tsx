@@ -6,6 +6,24 @@ import GoogleSessionRecoveryFields from './GoogleSessionRecoveryFields';
 afterEach(cleanup);
 
 describe('Google Live session recovery settings', () => {
+    it.each([
+        ['Recovery time limit (seconds)', 'session_recovery_timeout_sec', 10],
+        ['Maximum attempts', 'session_recovery_max_attempts', 2],
+        ['Caller audio buffer (milliseconds)', 'session_recovery_audio_buffer_ms', 1000],
+    ])('restores the default when %s is cleared', (label, field, defaultValue) => {
+        const onChange = vi.fn();
+        render(<GoogleSessionRecoveryFields config={{ session_resumption_enabled: true }} onChange={onChange} />);
+        fireEvent.change(screen.getByLabelText(label), { target: { value: '' } });
+        expect(onChange).toHaveBeenLastCalledWith(field, defaultValue);
+    });
+
+    it('preserves an explicitly entered zero audio buffer', () => {
+        const onChange = vi.fn();
+        render(<GoogleSessionRecoveryFields config={{ session_resumption_enabled: true }} onChange={onChange} />);
+        fireEvent.change(screen.getByLabelText('Caller audio buffer (milliseconds)'), { target: { value: '0' } });
+        expect(onChange).toHaveBeenLastCalledWith('session_recovery_audio_buffer_ms', 0);
+    });
+
     it('keeps both options off for existing saved configurations', () => {
         render(<GoogleSessionRecoveryFields config={{}} onChange={vi.fn()} />);
         expect((screen.getByLabelText('Keep long calls connected') as HTMLInputElement).checked).toBe(false);

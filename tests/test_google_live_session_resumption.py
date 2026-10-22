@@ -319,6 +319,8 @@ async def test_duplicate_completed_tool_reuses_result_without_execution(monkeypa
 @pytest.mark.parametrize("field,value", [
     ("cleanup_in_progress", True), ("cleanup_after_tts", True), ("transfer_active", True),
     ("pending_deferred_transfer", {}), ("current_action", {"type": "attended_transfer"}),
+    ("current_action", {"type": "attended_transfer", "decision": "accepted"}),
+    ("current_action", {"type": "attended_transfer", "decision": "declined"}),
 ])
 async def test_engine_recovery_guard_respects_routing_and_termination(field, value):
     engine = Engine.__new__(Engine)
@@ -539,6 +541,55 @@ async def test_generation_invalidates_an_older_safe_checkpoint(monkeypatch):
         await opened[0].end(1006)
         await provider._receive_task
         assert len(opened) == 1
+        assert len(disconnects(provider)) == 1
+    finally:
+        await provider.stop_session()
+
+
+async def test_audio_during_recovery_end_notification_is_not_replayed_next_time(monkeypatch):
+    sockets = [Socket(), Socket(), Socket()]
+    provider, _ = await start(monkeypatch, sockets)
+
+    async def notify(event):
+        if event.get("type") == "ProviderSessionRecovery" and event.get("active") is False:
+            await provider.send_audio(b"\x01\x00" * 320, 16000, "linear16")
+
+    provider.on_event = AsyncMock(side_effect=notify)
+    try:
+        for index in range(2):
+            await provider._handle_go_away({"goAway": {"timeLeft": "60s"}})
+            await recover(provider)
+            assert not provider._recovery_audio
+            audio = [item for item in sockets[index + 1].sent if "realtimeInput" in item]
+            assert len(audio) == 1  # Current notification input only; no previous turnover's frames.
+    finally:
+        await provider.stop_session()
+
+
+async def test_failed_replay_discards_socket_before_recovery_end_notification(monkeypatch):
+    provider, _ = await start(monkeypatch, [Socket()])
+    resumed = Socket()
+    end_states = []
+
+    async def resume():
+        provider.websocket = resumed
+        provider._setup_complete = True
+        provider._recovery_audio.extend(b"\x01\x00" * 320)
+
+    async def notify(event):
+        if event.get("type") == "ProviderSessionRecovery" and event.get("active") is False:
+            end_states.append((provider._recovering, provider.websocket))
+            await provider.send_audio(b"\x02\x00" * 320, 16000, "linear16")
+
+    provider._resume_transport = resume
+    provider._send_message = AsyncMock(return_value=False)
+    provider.on_event = AsyncMock(side_effect=notify)
+    try:
+        await provider._handle_go_away({"goAway": {"timeLeft": "60s"}})
+        await recover(provider)
+        assert end_states == [(False, None)]
+        assert not resumed.open
+        assert not provider._recovery_audio
         assert len(disconnects(provider)) == 1
     finally:
         await provider.stop_session()
