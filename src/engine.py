@@ -64,6 +64,7 @@ from .live_status_publisher import LiveStatusPublisher, live_status_component
 from .rtp_server import RTPServer
 from .audio.audiosocket_server import AudioSocketServer
 from .audio.audiosocket_protocol import (
+    AUDIO_TYPE_TO_FORMAT,
     AudioSocketAudioFrame,
     normalize_slin_format,
     supports_multirate_audiosocket,
@@ -515,6 +516,8 @@ class Engine:
                 'provider_grace_ms': config.streaming.provider_grace_ms,
                 'logging_level': config.streaming.logging_level,
                 'greeting_rtp_wait_ms': int(getattr(config.streaming, 'greeting_rtp_wait_ms', 1000)),
+                'greeting_media_ready_delay_ms': config.streaming.greeting_media_ready_delay_ms,
+                'greeting_media_ready_timeout_ms': config.streaming.greeting_media_ready_timeout_ms,
                 'egress_swap_mode': getattr(config.streaming, 'egress_swap_mode', 'auto'),
                 'egress_force_mulaw': self._should_force_mulaw(
                     getattr(config.streaming, 'egress_force_mulaw', False),
@@ -11119,6 +11122,16 @@ class Engine:
 
             # Media-path confirmation: first inbound audio frame observed.
             # Used to gate barge-in actions so we don't trigger during setup races.
+            greeting_delay = getattr(getattr(self, "streaming_playback_manager", None), "greeting_media_ready_delay_ms", 0)
+            if (
+                isinstance(greeting_delay, int) and greeting_delay > 0
+                and audio_bytes and len(audio_bytes) % 2 == 0 and frame_rate > 0
+                and AUDIO_TYPE_TO_FORMAT.get(frame.message_type) == (frame_format, frame_rate)
+                and session.audiosocket_conn_id == conn_id
+            ):
+                self.streaming_playback_manager.note_greeting_media_rx(
+                    session, "audiosocket", conn_id,
+                )
             try:
                 if not bool(getattr(session, "media_rx_confirmed", False)):
                     session.media_rx_confirmed = True
@@ -13236,6 +13249,19 @@ class Engine:
                 )
 
             # Record SSRC on the session for diagnostics (RTPServer maintains SSRC mapping internally).
+            # Readiness requires a decoded frame from the currently registered
+            # RTP session. An ARI/TALK_DETECT event is deliberately insufficient.
+            greeting_delay = getattr(getattr(self, "streaming_playback_manager", None), "greeting_media_ready_delay_ms", 0)
+            if (
+                isinstance(greeting_delay, int) and greeting_delay > 0
+                and source == "externalmedia" and pcm_16k and len(pcm_16k) % 2 == 0 and pcm_sample_rate > 0
+            ):
+                rtp = getattr(self, "rtp_server", None)
+                info = rtp.get_session_info(caller_channel_id) if rtp else None
+                if info and info.get("ssrc") == ssrc and rtp.has_remote_endpoint(caller_channel_id):
+                    self.streaming_playback_manager.note_greeting_media_rx(
+                        session, "externalmedia", session.external_media_id or session.media_channel_id,
+                    )
             try:
                 if ssrc and not getattr(session, "ssrc", None):
                     session.ssrc = ssrc

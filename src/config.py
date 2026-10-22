@@ -1236,6 +1236,9 @@ class StreamingConfig(BaseModel):
     # ExternalMedia-specific: safety net timeout (ms) for RTP endpoint establishment.
     # With RTP kick fix, RTP establishes in ~40-50ms. This fallback rarely triggers.
     greeting_rtp_wait_ms: int = Field(default=1000)
+    # Opt-in initial-greeting guard. Zero delay bypasses readiness entirely.
+    greeting_media_ready_delay_ms: int = Field(default=0, strict=True, ge=0, le=2000)
+    greeting_media_ready_timeout_ms: int = Field(default=1000, strict=True, ge=0, le=5000)
     # Egress endianness control for PCM16 slin16 over AudioSocket: 'auto'|'force_true'|'force_false'
     # - auto: derive from inbound probe (current behavior)
     # - force_true: always byteswap outbound PCM16

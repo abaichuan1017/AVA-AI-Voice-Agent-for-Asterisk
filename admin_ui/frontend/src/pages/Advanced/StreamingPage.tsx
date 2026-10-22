@@ -19,6 +19,19 @@ const StreamingPage = () => {
     const { restartRequired, refetch } = useRestartRequired();
     const [restartingEngine, setRestartingEngine] = useState(false);
     const [applyMethod, setApplyMethod] = useState<string>('restart');
+    const greetingSettings = [
+        { key: 'greeting_media_ready_delay_ms', label: 'Greeting Media-Ready Delay (ms)', max: 2000, fallback: 0,
+            help: '0 disables the guard entirely. Otherwise, wait for inbound media and send this much silence before the initial greeting. More silence adds greeting latency.' },
+        { key: 'greeting_media_ready_timeout_ms', label: 'Greeting Media-Ready Timeout (ms)', max: 5000, fallback: 1000,
+            help: 'Maximum readiness wait. 0 checks immediately and resumes existing playback/fallback if not ready. Ignored when delay is 0.' },
+    ];
+    const greetingErrors = Object.fromEntries(greetingSettings.map(({ key, max }) => {
+        const value = config.streaming?.[key];
+        return [key, value !== undefined && (
+            typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max
+        ) ? `Enter a whole number from 0 to ${max} ms.` : undefined];
+    }));
+    const invalidGreetingSettings = Object.values(greetingErrors).some(Boolean);
 
     useEffect(() => {
         // Cache-first: seed from the shared cache (no flash on revisit). The write
@@ -41,6 +54,10 @@ const StreamingPage = () => {
     };
 
     const handleSave = async () => {
+        if (invalidGreetingSettings) {
+            toast.error('Check the greeting media-readiness settings.');
+            return;
+        }
         setSaving(true);
         try {
             const sanitized = sanitizeConfigForSave(config);
@@ -61,7 +78,7 @@ const StreamingPage = () => {
         }
     };
 
-    const handleApplyAIEngine = async (force: boolean = false) => {
+    const handleApplyAIEngine = async () => {
         setRestartingEngine(true);
         try {
             // Prefer hot-reload (no dropped calls) when the backend says it suffices (MED-R1).
@@ -85,19 +102,10 @@ const StreamingPage = () => {
                 return;
             }
 
-            const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
+            const response = await axios.post('/api/system/containers/ai_engine/restart?force=false');
 
             if (response.data.status === 'warning') {
-                if (!force) {
-                    const confirmForce = window.confirm(
-                        `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                    );
-                    if (confirmForce) {
-                        await handleApplyAIEngine(true);
-                    }
-                    return;
-                }
-                toast.warning(response.data.message, { description: 'Force restart is still blocked.' });
+                toast.warning(response.data.message, { description: 'Wait until active calls finish before applying streaming changes.' });
                 return;
             }
 
@@ -205,7 +213,7 @@ const StreamingPage = () => {
                         {bannerMessage}
                     </div>
                     <button
-                        onClick={() => handleApplyAIEngine(false)}
+                        onClick={() => handleApplyAIEngine()}
                         disabled={restartingEngine}
                         className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-orange-500 text-white hover:bg-orange-600 font-medium disabled:opacity-50"
                     >
@@ -230,7 +238,7 @@ const StreamingPage = () => {
                 </div>
                 <button
                     onClick={handleSave}
-                    disabled={saving}
+                    disabled={saving || invalidGreetingSettings}
                     className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
                 >
                     <Save className="w-4 h-4 mr-2" />
@@ -350,6 +358,31 @@ const StreamingPage = () => {
                             onChange={(e) => updateStreamingConfig('continuous_stream', e.target.checked)}
                         />
                     </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            <ConfigSection title="Initial Greeting Media Readiness" description="Optional protection for opening words on AudioSocket and ExternalMedia streaming. File playback, WebSocket, and later responses are unchanged.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {greetingSettings.map(({ key, label, max, fallback, help }) => (
+                            <FormInput
+                                key={key}
+                                label={label}
+                                type="number"
+                                min="0"
+                                max={max}
+                                step="1"
+                                value={config.streaming?.[key] ?? fallback}
+                                onChange={(e) => {
+                                    const raw = e.target.value;
+                                    updateStreamingConfig(key, /^\d+$/.test(raw) ? Number(raw) : raw);
+                                }}
+                                error={greetingErrors[key]}
+                                tooltip={help}
+                            />
+                        ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">The caller does not need to speak: valid inbound silence counts as readiness. With delay 0, neither readiness waiting nor silence is added.</p>
                 </ConfigCard>
             </ConfigSection>
 

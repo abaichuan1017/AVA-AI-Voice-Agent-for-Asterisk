@@ -1,5 +1,7 @@
 import { ToolSection } from './toolSections';
 import TransferHandoffFields from './TransferHandoffFields';
+import EndpointDiscoveryModal from './EndpointDiscoveryModal';
+import { stageAdditions } from './endpointDiscovery';
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -119,6 +121,8 @@ const DEVICE_STATE_STATUS_OPTIONS: { value: string; label: string }[] = [
 ];
 
 const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, onSaveNow, section }: ToolFormProps) => {
+    const [discoveryOpen, setDiscoveryOpen] = useState(false);
+    useEffect(() => setDiscoveryOpen(false), [section]);
     // Background connection/verification requests can complete after the operator
     // navigates to another tool. Merge their results into the current draft.
     const latestConfigRef = useRef(config);
@@ -1607,14 +1611,23 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
 	                            )}
 	                            </div>
                                     </details>
-                                    <div className="flex justify-between items-center">
+                                </div>
+                            )}
+                            <div className="mt-4 space-y-4">
+                                    <div className="flex flex-wrap justify-between items-center gap-2">
 	                                <FormLabel>Destinations</FormLabel>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button type="button" onClick={() => setDiscoveryOpen(true)}
+                                            className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors">
+                                            Discover endpoints
+                                        </button>
 	                                <button
 	                                    onClick={handleAddDestination}
                                     className="text-xs flex items-center bg-secondary px-2 py-1 rounded hover:bg-secondary/80 transition-colors"
                                 >
                                     <Plus className="w-3 h-3 mr-1" /> Add Destination
                                 </button>
+                                    </div>
                             </div>
 
                             <div className="grid grid-cols-1 gap-2">
@@ -1655,7 +1668,6 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
                                 })}
                             </div>
                         </div>
-                    )}
                 </div>
 
                 {/* Attended (Warm) Transfer */}
@@ -3825,6 +3837,20 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
             </div>
 
             {/* Destination Edit Modal */}
+            {discoveryOpen && <EndpointDiscoveryModal
+                transfer={config.transfer}
+                onClose={() => setDiscoveryOpen(false)}
+                onAdd={rows => {
+                    const latest = latestConfigRef.current;
+                    const next = { ...latest, transfer: stageAdditions(latest.transfer, rows) };
+                    latestConfigRef.current = next;
+                    onChange(next);
+                    setDiscoveryOpen(false);
+                    toast.success('Destinations added to your edits', {
+                        description: 'Click Save & Apply to activate them for new calls.',
+                    });
+                }}
+            />}
             <Modal
                 isOpen={!!editingDestination}
                 onClose={() => setEditingDestination(null)}

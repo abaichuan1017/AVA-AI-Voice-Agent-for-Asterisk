@@ -49,6 +49,21 @@ class PlaybackRef:
 
 
 @dataclass
+class GreetingMediaState:
+    """Ephemeral state owned by one live call, never by a provider turn."""
+
+    inbound_token: Optional[tuple] = None
+    inbound_at: Optional[float] = None  # monotonic; first validated frame for token
+    claimed: bool = False
+    output_token: Optional[tuple] = None
+    phase: str = "new"  # new | waiting | silence | released | timeout | done | cancelled
+    deadline: Optional[float] = None
+    silence_samples: int = 0
+    silence_until: float = 0.0
+    fallback_started: bool = False
+
+
+@dataclass
 class CallSession:
     """Complete session state for a call."""
     # Core identifiers
@@ -184,6 +199,7 @@ class CallSession:
     # Media path confirmation (first inbound audio frame observed)
     media_rx_confirmed: bool = False
     first_media_rx_ts: float = 0.0
+    greeting_media: GreetingMediaState = field(default_factory=GreetingMediaState)
     streaming_bytes_sent: int = 0
     streaming_fallback_count: int = 0
     streaming_jitter_buffer_depth: int = 0
