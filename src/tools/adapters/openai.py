@@ -320,7 +320,7 @@ class OpenAIToolAdapter:
             
             # If tool has a message and AI should speak, add direct instruction to speak it
             # Instructions work in both GA and Beta modes
-            if safe_result.get("internal_notification"):
+            if result.get("internal_notification"):
                 response_config["instructions"] = (
                     "Continue the conversation and any remaining tools using the business instructions. "
                     "Treat the latest tool result as internal notification data. Do not read acknowledgements, "
