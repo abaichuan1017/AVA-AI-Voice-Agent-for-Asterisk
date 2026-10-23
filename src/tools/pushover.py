@@ -26,6 +26,35 @@ class NotificationState:
     briefings: dict = field(default_factory=dict)
 
 
+def verified_meeting(tool_calls):
+    """Use successful current-call calendar writes, never conversational claims."""
+    active = {}
+    for call in tool_calls:
+        if (
+            call.get("name") not in {"google_calendar", "microsoft_calendar"}
+            or call.get("status") != "success"
+        ):
+            continue
+        action = call.get("action")
+        event = call.get("target_id")
+        if action == "delete_event":
+            if event:
+                active.pop(event, None)
+            else:
+                active.clear()
+        elif action in {"create_event", "reschedule_event"}:
+            params = call.get("params") or {}
+            start, end = params.get("start_datetime"), params.get("end_datetime")
+            if (
+                event
+                and start
+                and end
+                and (action == "create_event" or event in active)
+            ):
+                active[event] = f"{start} to {end}"
+    return next(reversed(active.values()), "unknown") if active else "unknown"
+
+
 def notification_values(
     context, *, phase, enrichment=None, metadata=None, destination="", outcome=""
 ):
@@ -89,7 +118,7 @@ def notification_values(
         "outcome": outcome or "pending",
         "language": str(merged.get("language") or "unknown")[:64],
         # No inference of booked meetings from conversational intent.
-        "meeting": str(merged.get("confirmed_meeting") or "unknown")[:160],
+        "meeting": "unknown",
         "summary": "",
         "summary_status": "disabled",
         "update_key": "",
@@ -264,7 +293,11 @@ class PushoverPhaseTool(Tool):
                 "delivery_status": "skipped",
                 "error_code": "recipient_unavailable",
             }
-        destination = self.assignment.destination_key
+        destination = (
+            (getattr(context, "transfer_destination", None) or "unknown")
+            if self.phase == "post_call"
+            else self.assignment.destination_key
+        )
         outcome = (
             getattr(context, "call_outcome", "")
             if self.phase == "post_call"
@@ -278,6 +311,7 @@ class PushoverPhaseTool(Tool):
             destination=destination,
             outcome=outcome,
         )
+        values["meeting"] = verified_meeting(tool_calls)[:160]
         values["update_key"] = update
         async with self.state.lock:
             if event in self.state.events:

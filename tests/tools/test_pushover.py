@@ -580,3 +580,45 @@ async def test_summary_abort_deduplicates_repeated_model_invocation():
         and second["deduplicated"]
         and not notify.sender.send.called
     )
+
+
+@pytest.mark.asyncio
+async def test_completion_reports_actual_destination_and_requires_verified_meeting_write():
+    from src.tools.pushover import verified_meeting
+
+    _, post, _ = contexts()
+    post.call_outcome = "transferred"
+    post.transfer_destination = "Actual support queue"
+    post.call_metadata = {"confirmed_meeting": "Unverified conversational claim"}
+    notify = tool("post_call")
+    await notify.execute(post)
+    body = notify.sender.send.await_args.kwargs["message"]["message"]
+    assert "Actual support queue" in body
+    values = notification_values(post, phase="post_call", metadata=post.call_metadata)
+    assert values["meeting"] == "unknown"
+    rows = [
+        {
+            "name": "microsoft_calendar",
+            "status": "success",
+            "action": "check_availability",
+            "params": {
+                "start_datetime": "2026-11-02T10:00:00-07:00",
+                "end_datetime": "2026-11-02T10:30:00-07:00",
+            },
+        }
+    ]
+    assert verified_meeting(rows) == "unknown"
+    rows.append({**rows[0], "action": "create_event", "target_id": "synthetic-event"})
+    assert (
+        verified_meeting(rows)
+        == "2026-11-02T10:00:00-07:00 to 2026-11-02T10:30:00-07:00"
+    )
+    rows.append(
+        {
+            "name": "microsoft_calendar",
+            "status": "success",
+            "action": "delete_event",
+            "target_id": "synthetic-event",
+        }
+    )
+    assert verified_meeting(rows) == "unknown"

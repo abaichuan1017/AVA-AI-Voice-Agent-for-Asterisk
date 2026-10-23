@@ -56,7 +56,9 @@ name, then unknown. Configure existing metadata collection to retain
 `customer_name` and `customer_name_source=caller_confirmed` when applicable.
 Company may come from `company`, `company_name` or `customer_company`; CRM status
 comes from enrichment `crm_status`/`match_status`. A distinct `callback_number`,
-`language` and `confirmed_meeting` can be consumed when already captured. Pushover
+`language` can be consumed when already captured. Meeting times require a successful
+current-call calendar creation/update in tool history; cancellation removes them.
+Metadata or conversational claims alone never establish a booking. Pushover
 performs no CRM queries, meeting extraction or CRM writes. A confirmed name
 improves presentation without changing identity/routing/consent authority.
 
