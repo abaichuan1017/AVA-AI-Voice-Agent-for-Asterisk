@@ -119,3 +119,16 @@ async def test_timeout_and_empty_history_are_safe():
 @pytest.mark.parametrize("bad", ["{other}","{max_words!r}","{max_words:>10000000}","{max_words.real}"])
 def test_prompt_rejects_unsupported_formatting(bad):
     with pytest.raises(ValueError):summary_prompt(bad,100)
+
+@pytest.mark.asyncio
+async def test_summary_disabled_preserves_legacy_summary_parameter():
+    context,_=make_context()
+    context.session_store=None
+    tool=InCallHTTPTool(InCallHTTPConfig(name='legacy',url='https://example.com',parameters=[{'name':'summary','type':'string','required':True}]))
+    tool._execute_request=AsyncMock(return_value={'status':'success'})
+    result=await tool.execute({'summary':'Legacy model-provided note'},context)
+    assert result=={'status':'success'}
+    assert tool._execute_request.await_args.args[2]['summary']=='Legacy model-provided note'
+    assert [p.name for p in tool.definition.parameters]==['summary']
+    enabled=make_tool(parameters=[{'name':'summary','type':'string','required':True}])
+    assert enabled.definition.parameters==[]

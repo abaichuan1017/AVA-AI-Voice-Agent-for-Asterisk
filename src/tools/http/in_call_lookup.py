@@ -129,6 +129,8 @@ class InCallHTTPTool(Tool):
         # Convert config parameters to ToolParameter objects
         tool_params = []
         for p in config.parameters:
+            if config.generate_summary and p.get("name") in SUMMARY_FIELDS:
+                continue
             tool_params.append(ToolParameter(
                 name=p.get('name', ''),
                 type=p.get('type', 'string'),
@@ -505,9 +507,8 @@ class InCallHTTPTool(Tool):
             "caller_name": context.caller_name or "",
             "context_name": context.context_name or "",
             "call_id": context.call_id or "",
-            **{key: "" for key in SUMMARY_FIELDS},
-            "summary_json": json.dumps(""),
-            "summary_status": "disabled",
+            **({**{key: "" for key in SUMMARY_FIELDS}, "summary_json": json.dumps(""),
+                "summary_status": "pending"} if self.config.generate_summary else {}),
         }
         
         # Add pre-call tool results (fetched before call started)
@@ -531,7 +532,7 @@ class InCallHTTPTool(Tool):
                     call_metadata = getattr(session, 'call_metadata', None) or {}
                     built_in_keys = {
                         "caller_number", "called_number", "caller_name",
-                        "context_name", "call_id", *SUMMARY_FIELDS,
+                        "context_name", "call_id", *(SUMMARY_FIELDS if self.config.generate_summary else ()),
                     }
                     for key, value in call_metadata.items():
                         if key not in built_in_keys:
