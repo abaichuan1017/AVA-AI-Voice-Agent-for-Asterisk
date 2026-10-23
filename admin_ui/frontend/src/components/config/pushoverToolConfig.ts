@@ -1,9 +1,19 @@
+export interface PushoverRecipient {
+    label: string;
+    enabled: boolean;
+    key_file: string;
+}
+export interface PushoverCredentials {
+    token: string;
+    recipients: Record<string, string>;
+}
 export interface PushoverDraft {
     phase?: string;
     description?: string;
     recipient_label?: string;
     token_file?: string;
     key_file?: string;
+    recipients?: Record<string, PushoverRecipient>;
     title?: string;
     body?: string;
     priority?: number;
@@ -13,16 +23,25 @@ export interface PushoverDraft {
     suppress_after_tool?: string;
     [key: string]: unknown;
 }
-
-export const pushoverFields = [
+export function pushoverRecipients(value: PushoverDraft): Record<string, PushoverRecipient> {
+    if (value.recipients !== undefined) return value.recipients || {};
+    if (value.key_file || value.recipient_label)
+        return {
+            legacy: {
+                label: value.recipient_label || '',
+                enabled: true,
+                key_file: value.key_file || '',
+            },
+        };
+    return { recipient_1: { label: '', enabled: true, key_file: '' } };
+}
+const fields = [
     'kind',
     'phase',
     'enabled',
     'is_global',
     'description',
     'token_file',
-    'key_file',
-    'recipient_label',
     'title',
     'body',
     'priority',
@@ -38,9 +57,38 @@ export const pushoverFields = [
     'suppress_after_tool',
 ];
 export function pushoverDocument(value: PushoverDraft) {
-    return Object.fromEntries(
-        pushoverFields
-            .filter(key => value[key] !== undefined && value[key] !== '')
-            .map(key => [key, value[key]])
+    return {
+        ...Object.fromEntries(
+            fields
+                .filter(key => value[key] !== undefined && value[key] !== '')
+                .map(key => [key, value[key]])
+        ),
+        recipients: pushoverRecipients(value),
+    };
+}
+export function credentialPayload(value: PushoverCredentials, ids?: string[]) {
+    const recipients = Object.fromEntries(
+        Object.entries(value.recipients).filter(([id, key]) => key && (!ids || ids.includes(id)))
     );
+    return {
+        ...(value.token ? { token: value.token } : {}),
+        ...(Object.keys(recipients).length ? { recipients } : {}),
+    };
+}
+export function applyPushoverRefs(
+    value: PushoverDraft,
+    refs: {
+        token_file?: string;
+        key_file?: string;
+        recipients?: Record<string, { key_file: string }>;
+    }
+): PushoverDraft {
+    const recipients = { ...pushoverRecipients(value) };
+    for (const [id, ref] of Object.entries(refs.recipients || {}))
+        if (recipients[id]) recipients[id] = { ...recipients[id], ...ref };
+    if (refs.key_file && Object.keys(recipients).length === 1) {
+        const id = Object.keys(recipients)[0];
+        recipients[id] = { ...recipients[id], key_file: refs.key_file };
+    }
+    return { ...value, ...(refs.token_file ? { token_file: refs.token_file } : {}), recipients };
 }

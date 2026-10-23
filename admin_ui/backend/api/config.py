@@ -942,8 +942,8 @@ def _validate_ai_agent_config(content: str) -> Dict[str, Any]:
         for name, doc in section.items():
             if isinstance(doc, dict) and doc.get("kind") == "pushover":
                 try:
-                    from .tools import BUILTIN_RESERVED_TOOL_NAMES, RESERVED_TOOL_NAMES
-                    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", str(name)) or name in BUILTIN_RESERVED_TOOL_NAMES or name in RESERVED_TOOL_NAMES or str(name).startswith("mcp_"):
+                    from .tools import _reserved_builtin_names, RESERVED_TOOL_NAMES
+                    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", str(name)) or name in _reserved_builtin_names() or name in RESERVED_TOOL_NAMES or str(name).startswith("mcp_"):
                         raise ValueError()
                     native = PushoverToolConfig.model_validate(doc)
                     if (native.phase == "in_call") != (block == "in_call_tools"):
@@ -1406,6 +1406,17 @@ def _redact_websocket_media_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(doc, dict) and doc.get("kind") == "pushover":
                 for secret in ("token", "application_token", "app_token", "user", "user_key", "group_key", "key", "recipient_key"):
                     doc.pop(secret, None)
+    for block in ("tools", "in_call_tools"):
+        section = safe.get(block)
+        if not isinstance(section, dict): continue
+        for doc in section.values():
+            if not isinstance(doc, dict) or doc.get("kind") != "pushover": continue
+            recipients = doc.get("recipients")
+            if isinstance(recipients, dict):
+                for entry in recipients.values():
+                    if isinstance(entry, dict):
+                        for key in ("key", "user", "user_key", "group_key", "recipient_key"):
+                            entry.pop(key, None)
     pushover = safe.get("pushover") if isinstance(safe, dict) else None
     if isinstance(pushover, dict):
         for key in ("token", "application_token", "app_token"):

@@ -134,9 +134,23 @@ def test_full_document_validation_rejects_native_secret_without_echoing():
     from api.config import _validate_ai_agent_config
     from fastapi import HTTPException
     import yaml
+
     with pytest.raises(HTTPException) as error:
-        _validate_ai_agent_config(yaml.safe_dump({"in_call_tools": {"notify": {"kind": "pushover", "phase": "in_call", "token": "secret-value-never-echo"}}}))
+        _validate_ai_agent_config(
+            yaml.safe_dump(
+                {
+                    "in_call_tools": {
+                        "notify": {
+                            "kind": "pushover",
+                            "phase": "in_call",
+                            "token": "secret-value-never-echo",
+                        }
+                    }
+                }
+            )
+        )
     assert error.value.status_code == 400
+    assert error.value.detail == "Invalid managed Pushover tool configuration"
     assert "secret-value" not in str(error.value.detail)
 
 
@@ -144,6 +158,109 @@ def test_full_document_validation_protects_builtin_tool_names():
     from api.config import _validate_ai_agent_config
     from fastapi import HTTPException
     import yaml
+
     with pytest.raises(HTTPException) as error:
-        _validate_ai_agent_config(yaml.safe_dump({"in_call_tools": {"hangup_call": {"kind": "pushover", "phase": "in_call"}}}))
+        _validate_ai_agent_config(
+            yaml.safe_dump(
+                {
+                    "in_call_tools": {
+                        "hangup_call": {"kind": "pushover", "phase": "in_call"}
+                    }
+                }
+            )
+        )
     assert error.value.status_code == 400
+    assert error.value.detail == "Invalid managed Pushover tool configuration"
+
+
+def test_multiple_recipient_credentials_are_staged_without_plaintext(client):
+    browser, _, sender, writes = client
+    response = browser.post(
+        "/api/pushover/credentials",
+        json={"token": "a" * 30, "recipients": {"alice": "b" * 30, "team": "c" * 30}},
+    )
+    assert response.status_code == 200 and len(writes) == 3 and not sender.send.called
+    assert set(response.json()["recipients"]) == {"alice", "team"}
+    assert "b" * 30 not in response.text and "c" * 30 not in response.text
+    bad = browser.post(
+        "/api/pushover/credentials",
+        json={"recipients": {"alice": "b" * 30, "bad": "not-a-key"}},
+    )
+    assert bad.status_code == 422 and len(writes) == 3 and "not-a-key" not in bad.text
+
+
+def test_enabled_recipients_and_specific_explicit_test_scope(client):
+    browser, _, sender, _ = client
+    config = {
+        "kind": "pushover",
+        "phase": "in_call",
+        "recipients": {
+            "alice": {"label": "Alice", "key_file": "one"},
+            "team": {"label": "Group", "key_file": "two"},
+            "off": {"enabled": False, "key_file": "three"},
+        },
+    }
+    result = browser.post(
+        "/api/pushover/test", json={"config": config, "recipient_id": "alice"}
+    )
+    assert result.status_code == 200 and sender.send.call_count == 1
+    assert set(result.json()["notification_deliveries"]) == {"alice"}
+    assert (
+        browser.post(
+            "/api/pushover/test", json={"config": config, "recipient_id": "off"}
+        ).status_code
+        == 422
+    )
+    assert (
+        browser.post(
+            "/api/pushover/test", json={"config": config, "recipient_id": "removed"}
+        ).status_code
+        == 422
+    )
+    sender.send.reset_mock()
+    result = browser.post("/api/pushover/validate", json={"config": config})
+    assert (
+        sender.send.call_count == 2
+        and result.json()["notification_deliveries"]["off"]["delivery_status"]
+        == "disabled"
+    )
+
+
+def test_raw_yaml_reserved_name_probe_matches_registry(monkeypatch):
+    from api.config import _validate_ai_agent_config
+    from fastapi import HTTPException
+    import yaml
+
+    monkeypatch.setattr(tools, "_reserved_builtin_cache", None)
+    with pytest.raises(HTTPException) as error:
+        _validate_ai_agent_config(
+            yaml.safe_dump(
+                {
+                    "in_call_tools": {
+                        "blind_transfer": {"kind": "pushover", "phase": "in_call"}
+                    }
+                }
+            )
+        )
+    assert error.value.status_code == 400
+    assert error.value.detail == "Invalid managed Pushover tool configuration"
+
+
+def test_clearing_recipient_map_cannot_revive_legacy_key(client):
+    browser, state, _, _ = client
+    response = browser.post(
+        "/api/tools/managed",
+        json={
+            "name": "legacy_notice",
+            "kind": "pushover",
+            "phase": "in_call",
+            "key_file": "old-key-reference",
+        },
+    )
+    assert response.status_code == 201
+    response = browser.patch(
+        "/api/tools/managed/legacy_notice", json={"recipients": None}
+    )
+    assert response.status_code == 200
+    config = state["in_call_tools"]["legacy_notice"]
+    assert config["recipients"] == {} and config["key_file"] == ""

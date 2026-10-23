@@ -2,8 +2,9 @@
 
 Pushover is a native tool type in the existing **Tools → Pre-Call / In-Call /
 Post-Call** workflow. Create as many named tools as needed, each with its own
-recipient, templates, summary settings and description. No separate integration
-panel, automatic agent assignments or connector container is required.
+recipient list, templates, summary settings and description. The Tool Type selector
+links directly to the [official Pushover setup/API documentation](https://pushover.net/api).
+This guide is also available in AVA's Documentation menu as **Pushover Tool**.
 
 ## Configure a tool
 
@@ -12,19 +13,24 @@ panel, automatic agent assignments or connector container is required.
    tool and choose whether it is global using the normal controls. Global tools
    apply to all agents except existing opt-outs; otherwise select the tool in
    **Agents**, in that phase's existing tool selector.
-3. Give the recipient a display name. Enter a Pushover application token and a
-   user/group key. Both are password fields. Blank fields keep saved credentials;
-   explicit clear controls remove the current references. Keys are never supplied
-   by the AI or included in the tool's model parameters.
+3. Enter the shared Pushover application token. Under **Recipients / groups**, use
+   **Add recipient / group** to add up to 16 rows. Each row has a display name,
+   masked user/group key and **Recipient enabled** switch. Remove deletes a row;
+   disable retains its settings without sending. Blank fields keep saved keys;
+   explicit clear controls remove references. Keys never appear in model parameters.
+   A Pushover group key addresses its active group members. Group membership is
+   managed in Pushover; individual users and groups can coexist in the same tool.
 4. Set the notification title and plain-text message template. **Preview message**
-   uses synthetic data and makes no network/model request. **Validate recipient**
-   checks credentials without sending a message. **Send test notification** sends
-   a fixed synthetic message only when explicitly clicked.
+   uses synthetic data and makes no network/model request. **Validate …**
+   checks that row's credentials without sending a message. **Send test to …**
+   sends a fixed synthetic message to that enabled row only when explicitly
+   clicked. Disabled rows cannot send tests. Each result is shown separately.
 5. For in-call and post-call tools, optionally enable **Generate AI Summary** and
    choose the configured provider, summary prompt, word limit, timeout and failure
-   policy. The same tool generates the summary internally before delivery; there
-   is no separate summary-tool invocation or copying step. Explicit provider
-   selection never falls back to another endpoint. Pre-call tools have no summary.
+   policy. The tool generates **one summary per invocation**, then shares the
+   same rendered content across enabled recipients. A recipient failure does not
+   trigger another summary or prevent other recipients from being attempted. Explicit
+   provider selection never falls back to another endpoint. Pre-call tools have no summary.
 6. Click **Update tool**, then the Tools page's normal **Save & Apply**. This stages,
    saves and publishes the same captured generation as HTTP tools. Preview,
    credential staging and tests do not enable or save a tool. Active calls retain
@@ -85,8 +91,10 @@ For handoffs, write **handoff requested** in the template rather than claiming a
 transfer was answered or successful. Optional **Advanced** controls allow an in-call
 tool to identify an intended transfer destination key, and a post-call tool to
 reference that tool by name for completion suppression. Suppression requires an
-accepted send with the same effective credentials and an actual matching next
-transfer outcome. Failed/cancelled transfers, changed credentials, unknown/mismatched
+accepted send for that recipient with the same effective credentials and an actual
+matching next transfer outcome. Suppression is evaluated independently per recipient;
+a new recipient still receives completion even if other recipients were briefed. Failed/cancelled
+transfers, changed credentials, unknown/mismatched
 destinations and rejected/uncertain sends retain completion. Leaving the reference
 blank always retains the normal post-call notification.
 
@@ -106,11 +114,17 @@ and rollback. Remove them manually only after no retained configuration/call use
 them. Never copy secret files into exports or public PRs.
 
 Diagnostics distinguish accepted, rejected, uncertain, timeout, capacity, skipped
-and suppressed results. Acceptance means API queuing, not phone display or operator
+and suppressed results, including per-recipient labels and a partial aggregate result.
+Disabled rows appear as disabled. One rejection does not turn other accepted
+recipients into failures or cause an automatic retry. Acceptance means API queuing, not phone display or operator
 acknowledgement. There is no automatic retry after uncertain delivery/cancellation.
 Explicit rejections open a temporary five-minute circuit. Duplicate protection is
 per call and named tool, with later caller turns/transfer attempts allowing a new
-update and a 64-event call limit. Different named tools remain independent.
+update and a 64-event call limit. Identical resolved keys within one tool invocation
+send once even if several rows use them; their diagnostics show deduplication.
+AVA cannot inspect group membership, so overlapping groups or a user listed both
+individually and in a group can receive multiple messages. Different named tools
+remain independent.
 Protection is best effort and in-memory; restart replay, exactly-once delivery,
 emergency acknowledgement workflows and attachments are not implemented.
 
@@ -120,3 +134,19 @@ acceptance requires HTTP 200 and JSON integer `status=1`. Automated verification
 uses synthetic conversations and mocked clients. Live acceptance requires an
 operator-configured recipient and calls testing chosen phases, summary/provider
 failure, duplicate handling, transfer outcomes, continuation and cleanup.
+
+
+## Upgrade and verification
+
+Earlier single-key named tools continue to work. The editor presents their saved
+key as one recipient row without revealing or replacing it. Saving converts that
+configuration to the recipient map. Explicitly removing every row leaves delivery
+disabled; it never revives the old single-key field. Active calls retain their
+captured recipient settings through edits, removals and credential rotation.
+
+Before enabling a pilot, select the intended Agent and phase. Keep Global off for
+one-Agent testing. Preview content, validate one enabled row, explicitly send its
+test, then Save & Apply. Verify multiple enabled rows, disabled rows, partial
+rejection, one-summary generation and per-recipient Call History results with a
+synthetic call. Real phone display/read acknowledgement remains outside AVA's API
+acceptance evidence. Archive raw call logs before analysis.

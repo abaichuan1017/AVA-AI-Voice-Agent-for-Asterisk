@@ -1061,6 +1061,7 @@ class ManagedToolWrite(BaseModel):
     return_raw_json: Optional[bool] = None
     error_message: Optional[str] = None
 
+    recipients: Optional[Dict[str, Any]] = None
     token_file: Optional[str] = None
     key_file: Optional[str] = None
     recipient_label: Optional[str] = None
@@ -1154,6 +1155,7 @@ class ManagedToolPatch(BaseModel):
     return_raw_json: Optional[bool] = None
     error_message: Optional[str] = None
 
+    recipients: Optional[Dict[str, Any]] = None
     token_file: Optional[str] = None
     key_file: Optional[str] = None
     recipient_label: Optional[str] = None
@@ -1320,10 +1322,10 @@ def _reserved_builtin_names() -> frozenset:
         import sys
         if project_root and project_root not in sys.path:
             sys.path.insert(0, project_root)
-        from src.tools.registry import tool_registry  # type: ignore
-        tool_registry.clear()
-        tool_registry.initialize_default_tools()
-        for d in tool_registry.get_definitions():
+        from src.tools.registry import ToolRegistry  # type: ignore
+        probe = ToolRegistry.isolated()
+        probe.initialize_default_tools()
+        for d in probe.get_definitions():
             n = str(getattr(d, "name", "") or "").strip()
             if n and not n.startswith("mcp_"):
                 names.add(n)
@@ -1637,6 +1639,8 @@ async def patch_managed_tool(name: str, body: ManagedToolPatch):
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if merged["kind"] == "pushover":
+        if "recipients" in patch and patch["recipients"] is None:
+            merged["recipients"] = {}
         merged = _build_tool_doc(merged, new_phase)
     await _validate_summary_provider_selection(merged)
 

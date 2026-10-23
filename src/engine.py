@@ -23251,8 +23251,7 @@ class Engine:
             pre_call_ctx.notification_state = session.notification_state
             pre_call_ctx.pre_call_results = dict(results)
             pre_call_ctx.call_metadata = dict(session.call_metadata)
-            for arrival_tool in arrival_tools:
-                await run_tool_with_timeout(arrival_tool)
+            await asyncio.gather(*(run_tool_with_timeout(tool) for tool in arrival_tools))
             # Execution metadata for the call history UI (one entry per tool).
             session.pre_call_tool_calls = tool_call_records
             await self._save_session(session)

@@ -90,6 +90,12 @@ class PhaseSettings(StrictConfig):
         return self
 
 
+class PushoverRecipient(StrictConfig):
+    label: str = Field(default="", max_length=100)
+    enabled: bool = True
+    key_file: str = ""
+
+
 class PushoverToolConfig(PhaseSettings):
     kind: Literal["pushover"] = "pushover"
     phase: Literal["pre_call", "in_call", "post_call"]
@@ -101,11 +107,41 @@ class PushoverToolConfig(PhaseSettings):
     token_file: str = ""
     key_file: str = ""
     recipient_label: str = Field(default="", max_length=100)
+    recipients: dict[str, PushoverRecipient] = Field(
+        default_factory=dict, max_length=16
+    )
     priority: Literal[-2, -1, 0, 1] = 0
     sound: str = Field(default="", max_length=64)
     timeout_ms: int = Field(default=5000, ge=100, le=10000)
     destination_key: str = Field(default="", max_length=64)
     suppress_after_tool: str = Field(default="", max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_single_recipient(cls, raw):
+        if not isinstance(raw, dict):
+            return raw
+        data = dict(raw)
+        if "recipients" not in data:
+            if data.get("key_file") or data.get("recipient_label"):
+                data["recipients"] = {
+                    "legacy": {
+                        "label": data.get("recipient_label", ""),
+                        "key_file": data.get("key_file", ""),
+                        "enabled": True,
+                    }
+                }
+        else:
+            # Explicit empty recipients must not reactivate a removed legacy key.
+            data["key_file"], data["recipient_label"] = "", ""
+        return data
+
+    @field_validator("recipients")
+    @classmethod
+    def recipient_identifiers(cls, value):
+        if any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", key) for key in value):
+            raise ValueError("Invalid recipient identifier")
+        return value
 
     @model_validator(mode="after")
     def validate_tool(self):
@@ -148,6 +184,24 @@ def render_message(config, phase, values):
         "message": render(body_template, safe_values)[:1024],
         "priority": config.priority,
         **({"sound": config.sound} if config.sound else {}),
+    }
+
+
+def delivery_outcome(deliveries):
+    statuses = {
+        row["delivery_status"]
+        for row in deliveries.values()
+        if row["delivery_status"] != "disabled"
+    }
+    if not statuses:
+        return {"delivery_status": "skipped", "status": "skipped"}
+    return {
+        "delivery_status": next(iter(statuses)) if len(statuses) == 1 else "partial",
+        "status": (
+            "success"
+            if statuses <= {"accepted", "suppressed"}
+            else "skipped" if statuses == {"skipped"} else "error"
+        ),
     }
 
 

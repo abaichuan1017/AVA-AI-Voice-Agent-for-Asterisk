@@ -505,4 +505,214 @@ async def test_sender_supports_backend_python_without_asyncio_timeout(
 
 def test_native_tool_cannot_shadow_builtin_during_generation():
     with pytest.raises(ToolConfigPolicyError):
-        ToolRuntimeGeneration.build(generation_id=1, config={"in_call_tools":{"hangup_call":configured().model_dump()}})
+        ToolRuntimeGeneration.build(
+            generation_id=1,
+            config={"in_call_tools": {"hangup_call": configured().model_dump()}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_multiple_recipients_share_summary_and_disabled_rows_never_send(tmp_path):
+    app = tmp_path / "app"
+    app.write_text("a" * 30)
+    user = tmp_path / "user"
+    user.write_text("b" * 30)
+    group = tmp_path / "group"
+    group.write_text("c" * 30)
+    cfg = PushoverToolConfig(
+        phase="in_call",
+        token_file=str(app),
+        recipients={
+            "alice": {"label": "Alice", "key_file": str(user)},
+            "team": {"label": "Team group", "key_file": str(group)},
+            "off": {"label": "Disabled", "enabled": False, "key_file": "never-read"},
+            "alias": {"label": "Same Alice", "key_file": str(user)},
+        },
+        generate_summary=True,
+        summary_provider="test_llm",
+    )
+    generator = AsyncMock(
+        return_value=SummaryGenerationResult(
+            text="One shared recap", provider="test_llm", status="ok"
+        )
+    )
+    sender = SimpleNamespace(
+        send=AsyncMock(
+            side_effect=[
+                {"delivery_status": "accepted"},
+                {"delivery_status": "rejected", "error_code": "api_rejected"},
+            ]
+        )
+    )
+    notify = tool(cfg=cfg, sender=sender)
+    live, _, _ = contexts()
+    live.tool_registry = SimpleNamespace(summary_generator=generator)
+    result = await notify.execute({}, live)
+    assert generator.await_count == 1 and sender.send.await_count == 2
+    assert all(
+        call.kwargs["message"]["message"].count("One shared recap") == 1
+        for call in sender.send.await_args_list
+    )
+    assert result["delivery_status"] == "partial"
+    rows = result["notification_deliveries"]
+    assert (
+        rows["off"]["delivery_status"] == "disabled" and rows["alias"]["deduplicated"]
+    )
+    assert (
+        rows["alice"]["delivery_status"] == "accepted"
+        and rows["team"]["delivery_status"] == "rejected"
+    )
+    assert str(user) not in str(result) and "b" * 30 not in str(result)
+    await notify.execute({}, live)
+    assert generator.await_count == 1 and sender.send.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_all_disabled_or_explicitly_removed_recipients_skip_summary_and_delivery():
+    for recipients in ({"off": {"enabled": False}}, {}):
+        notify = tool(
+            cfg=PushoverToolConfig(
+                phase="in_call",
+                key_file="legacy-not-reactivated",
+                recipients=recipients,
+                generate_summary=True,
+                summary_provider="test_llm",
+            )
+        )
+        live, _, _ = contexts()
+        generator = AsyncMock()
+        live.tool_registry = SimpleNamespace(summary_generator=generator)
+        result = await notify.execute({}, live)
+        assert result["delivery_status"] == "skipped"
+        assert not generator.called and not notify.sender.send.called
+
+
+@pytest.mark.asyncio
+async def test_concurrent_named_post_tools_do_not_hold_call_lock_during_network():
+    both = asyncio.Event()
+    arrivals = []
+
+    async def send(**kwargs):
+        arrivals.append(kwargs)
+        if len(arrivals) == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), 1)
+        return {"delivery_status": "accepted"}
+
+    _, post, _ = contexts()
+    one = PushoverTool(
+        "one", configured("post_call").model_dump(), sender=SimpleNamespace(send=send)
+    )
+    two = PushoverTool(
+        "two", configured("post_call").model_dump(), sender=SimpleNamespace(send=send)
+    )
+    results = await asyncio.gather(one.execute(post), two.execute(post))
+    assert len(arrivals) == 2 and all(
+        row["delivery_status"] == "accepted" for row in results
+    )
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_fanout_preserves_acceptance_and_uncertainty():
+    async def send(**kwargs):
+        if kwargs["key_file"] == "fast":
+            return {"delivery_status": "accepted"}
+        await asyncio.Event().wait()
+
+    notify = tool(
+        cfg=PushoverToolConfig(
+            phase="in_call",
+            timeout_ms=100,
+            recipients={"fast": {"key_file": "fast"}, "slow": {"key_file": "slow"}},
+        ),
+        sender=SimpleNamespace(send=send),
+    )
+    live, _, _ = contexts()
+    result = await notify.execute({}, live)
+    assert result["status"] == "timeout" and result["delivery_status"] == "partial"
+    assert result["notification_deliveries"]["fast"]["delivery_status"] == "accepted"
+    assert result["notification_deliveries"]["slow"]["delivery_status"] == "uncertain"
+    repeated = await notify.execute({}, live)
+    assert repeated["deduplicated"] and repeated["delivery_status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_suppression_is_per_recipient_not_per_tool(tmp_path):
+    keys = []
+    for index, char in enumerate("abc"):
+        path = tmp_path / str(index)
+        path.write_text(char * 30)
+        keys.append(str(path))
+    live, post, _ = contexts()
+    first = tool(
+        cfg=PushoverToolConfig(
+            phase="in_call",
+            token_file=keys[0],
+            recipients={"alice": {"key_file": keys[1]}},
+            destination_key="support",
+        )
+    )
+    await first.execute({}, live)
+    post.call_outcome = "transferred"
+    post.transfer_destination = "support"
+    post.tool_calls.append({"name": "blind_transfer"})
+    finish = tool(
+        "post_call",
+        cfg=PushoverToolConfig(
+            phase="post_call",
+            token_file=keys[0],
+            recipients={"alice": {"key_file": keys[1]}, "bob": {"key_file": keys[2]}},
+            suppress_after_tool="notify_in_call",
+        ),
+    )
+    result = await finish.execute(post)
+    assert finish.sender.send.await_count == 1
+    assert result["notification_deliveries"]["alice"]["delivery_status"] == "suppressed"
+    assert result["notification_deliveries"]["bob"]["delivery_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_notifications_are_concurrent_after_enrichment():
+    from src.engine import Engine
+    from src.core.models import CallSession
+
+    engine = Engine.__new__(Engine)
+    session = CallSession(
+        call_id="synthetic-concurrent-pre",
+        caller_channel_id="synthetic-concurrent-pre",
+        context_name="sales",
+    )
+    both = asyncio.Event()
+    entered = []
+
+    async def send(**kwargs):
+        entered.append(kwargs)
+        if len(entered) == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), 1)
+        return {"delivery_status": "accepted"}
+
+    tools = [
+        PushoverTool(
+            name, configured("pre_call").model_dump(), sender=SimpleNamespace(send=send)
+        )
+        for name in ("one", "two")
+    ]
+    session.tool_runtime_registry = SimpleNamespace(
+        get_tools_for_context=lambda **kwargs: tools
+    )
+    session.tool_runtime_config = {"tools": {}}
+    engine.transport_orchestrator = SimpleNamespace(
+        get_context_config=lambda *args: SimpleNamespace(
+            pre_call_tools=[], disable_global_pre_call_tools=[]
+        )
+    )
+    engine.config = SimpleNamespace()
+    engine.ari_client = None
+    engine._save_session = AsyncMock()
+    await engine._execute_pre_call_tools(session.call_id, session)
+    assert len(entered) == 2
+    assert len(session.pre_call_tool_calls) == 2
+    assert all(
+        row["delivery_status"] == "accepted" for row in session.pre_call_tool_calls
+    )

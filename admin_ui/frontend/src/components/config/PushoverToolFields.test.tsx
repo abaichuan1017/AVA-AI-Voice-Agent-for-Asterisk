@@ -21,10 +21,17 @@ beforeEach(() => {
             ],
         },
     });
-    vi.mocked(axios.post).mockImplementation(async url => ({
+    vi.mocked(axios.post).mockImplementation(async (url, body) => ({
         data:
             url === '/api/pushover/credentials'
-                ? { token_file: '/managed/application', key_file: '/managed/recipient' }
+                ? {
+                      token_file: '/managed/application',
+                      recipients: Object.fromEntries(
+                          Object.keys(
+                              (body as { recipients?: Record<string, string> })?.recipients || {}
+                          ).map(id => [id, { key_file: `/managed/${id}` }])
+                      ),
+                  }
                 : { title: 'Synthetic preview', message: 'Synthetic message', preview_only: true },
     }));
 });
@@ -39,16 +46,19 @@ describe('Pushover in the existing tool editor', () => {
             fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
             fireEvent.change(screen.getByLabelText('Tool type'), { target: { value: 'pushover' } });
             expect(screen.queryByLabelText('URL')).not.toBeInTheDocument();
+            expect(
+                screen.getByRole('link', { name: /Official Pushover documentation/ })
+            ).toHaveAttribute('href', 'https://pushover.net/api');
             fireEvent.change(screen.getByLabelText('Tool Name'), {
                 target: { value: 'notify_sales' },
             });
-            fireEvent.change(screen.getByLabelText('Recipient name'), {
+            fireEvent.change(screen.getByLabelText('Recipient name (recipient_1)'), {
                 target: { value: 'Sales' },
             });
             fireEvent.change(screen.getByLabelText('Application token'), {
                 target: { value: 'a'.repeat(30) },
             });
-            fireEvent.change(screen.getByLabelText('User/group key'), {
+            fireEvent.change(screen.getByLabelText('User/group key (recipient_1)'), {
                 target: { value: 'b'.repeat(30) },
             });
             if (phase === 'in_call')
@@ -62,9 +72,14 @@ describe('Pushover in the existing tool editor', () => {
             expect(doc).toMatchObject({
                 kind: 'pushover',
                 phase,
-                recipient_label: 'Sales',
                 token_file: '/managed/application',
-                key_file: '/managed/recipient',
+                recipients: {
+                    recipient_1: {
+                        label: 'Sales',
+                        enabled: true,
+                        key_file: '/managed/recipient_1',
+                    },
+                },
             });
             expect(doc).not.toHaveProperty('url');
             expect(doc).not.toHaveProperty('parameters');
@@ -89,6 +104,7 @@ describe('Pushover in the existing tool editor', () => {
                         is_global: false,
                         token_file: '/managed/application',
                         key_file: '/managed/recipient',
+                        recipient_label: 'Sales',
                         description: 'Use for Sales',
                     },
                 }}
@@ -98,7 +114,7 @@ describe('Pushover in the existing tool editor', () => {
         );
         fireEvent.click(screen.getByRole('button', { name: 'Configure notify_sales' }));
         expect(screen.getByLabelText('Application token')).toHaveValue('');
-        expect(screen.getByLabelText('User/group key')).toHaveValue('');
+        expect(screen.getByLabelText('User/group key (legacy)')).toHaveValue('');
         fireEvent.click(screen.getByRole('button', { name: 'Preview message' }));
         await screen.findByText('Synthetic preview');
         expect(vi.mocked(axios.post).mock.calls.map(([url]) => url)).toEqual([
@@ -107,5 +123,36 @@ describe('Pushover in the existing tool editor', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Update tool' }));
         await waitFor(() => expect(changed).toHaveBeenCalledOnce());
         expect(changed.mock.calls[0][0].notify_sales.token_file).toBe('/managed/application');
+        expect(changed.mock.calls[0][0].notify_sales.recipients.legacy.key_file).toBe('/managed/recipient');
     });
+});
+
+it('adds, disables and removes recipient/group rows without sending', async () => {
+    const changed = vi.fn();
+    render(<HTTPToolForm phase="post_call" config={{}} onChange={changed} presentation="page" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
+    fireEvent.change(screen.getByLabelText('Tool type'), { target: { value: 'pushover' } });
+    fireEvent.change(screen.getByLabelText('Tool Name'), { target: { value: 'send_recap' } });
+    fireEvent.change(screen.getByLabelText('Recipient name (recipient_1)'), {
+        target: { value: 'Alice' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add recipient / group' }));
+    fireEvent.change(screen.getByLabelText('Recipient name (recipient_2)'), {
+        target: { value: 'Sales group' },
+    });
+    fireEvent.click(screen.getByLabelText('Recipient enabled (recipient_2)'));
+    expect(screen.getByRole('button', { name: 'Send test to Sales group' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Add recipient / group' }));
+    fireEvent.change(screen.getByLabelText('User/group key (recipient_3)'), {
+        target: { value: 'd'.repeat(30) },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove recipient_3' }));
+    expect(screen.queryByLabelText('User/group key (recipient_3)')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update tool' }));
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(changed.mock.calls[0][0].send_recap.recipients).toEqual({
+        recipient_1: { label: 'Alice', enabled: true, key_file: '' },
+        recipient_2: { label: 'Sales group', enabled: false, key_file: '' },
+    });
+    expect(axios.post).not.toHaveBeenCalled();
 });

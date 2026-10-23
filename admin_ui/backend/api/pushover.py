@@ -10,7 +10,13 @@ import re
 from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from . import config as config_api
-from src.integrations.pushover import PushoverToolConfig, get_sender, render_message
+from src.integrations.pushover import (
+    PushoverToolConfig,
+    get_sender,
+    render_message,
+    delivery_outcome,
+    read_key,
+)
 
 router = APIRouter()
 
@@ -31,23 +37,40 @@ async def _body(request):
 
 
 async def _credentials(raw):
-    if not isinstance(raw, dict) or set(raw) - {"token", "recipient"}:
+    if not isinstance(raw, dict) or set(raw) - {"token", "recipient", "recipients"}:
         raise HTTPException(422, "Enter application and recipient credentials")
-    # Validate all fields before creating any files. Never echo rejected input.
+    recipients = raw.get("recipients", {})
+    if (
+        not isinstance(recipients, dict)
+        or len(recipients) > 16
+        or any(
+            not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", str(key))
+            for key in recipients
+        )
+    ):
+        raise HTTPException(422, "Invalid recipient identifiers")
+    fields = {key: value for key, value in raw.items() if key != "recipients"}
+    # Validate the entire batch before writing any secret, without echoing input.
     if any(
-        not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9]{30}", v)
-        for v in raw.values()
+        not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9]{30}", value)
+        for value in [*fields.values(), *recipients.values()]
     ):
         raise HTTPException(422, "Credentials require 30 alphanumeric characters")
     refs = {}
-    for field, value in raw.items():
+
+    async def write(value):
         identifier = "pushover-tool-" + uuid4().hex
         await asyncio.to_thread(
             config_api._write_provider_secret, identifier, "api-key", value.encode()
         )
-        refs["token_file" if field == "token" else "key_file"] = (
-            config_api._provider_secret_path(identifier, "api-key")
-        )
+        return config_api._provider_secret_path(identifier, "api-key")
+
+    for field, value in fields.items():
+        refs["token_file" if field == "token" else "key_file"] = await write(value)
+    if recipients:
+        refs["recipients"] = {
+            key: {"key_file": await write(value)} for key, value in recipients.items()
+        }
     return refs
 
 
@@ -67,6 +90,11 @@ def _config(raw):
 def preview_values(phase):
     return {
         "agent": "Example Agent",
+        "context_name": "Example Agent",
+        "caller_name": "Example Caller",
+        "called_number": "+18005550100",
+        "call_outcome": "caller_hangup" if phase == "post_call" else "pending",
+        "call_duration": "120" if phase == "post_call" else "0",
         "stage": {
             "pre_call": "arrival",
             "in_call": "in-call update",
@@ -102,9 +130,30 @@ async def preview(request: Request):
 async def _action(request, validate):
     raw = await _body(request)
     cfg = _config(raw.get("config") or {})
-    refs = await _credentials(raw.get("credentials") or {})
-    cfg = cfg.model_copy(update=refs)
-    # Explicit tests use fixed synthetic content and do not call summary models.
+    selected = raw.get("recipient_id")
+    if selected is not None and (
+        not isinstance(selected, str)
+        or selected not in cfg.recipients
+        or not cfg.recipients[selected].enabled
+    ):
+        raise HTTPException(422, "Select an enabled recipient")
+    credentials = raw.get("credentials") or {}
+    if (
+        isinstance(credentials, dict)
+        and isinstance(credentials.get("recipients", {}), dict)
+        and set(credentials.get("recipients", {})) - set(cfg.recipients)
+    ):
+        raise HTTPException(422, "Recipient no longer exists")
+    refs = await _credentials(credentials)
+    data = cfg.model_dump()
+    data["token_file"] = refs.get("token_file", cfg.token_file)
+    for key, ref in refs.get("recipients", {}).items():
+        data["recipients"][key].update(ref)
+    if "key_file" in refs:
+        if len(cfg.recipients) != 1:
+            raise HTTPException(422, "Select a recipient row")
+        data["recipients"][next(iter(cfg.recipients))]["key_file"] = refs["key_file"]
+    cfg = _config(data)
     message = (
         None
         if validate
@@ -115,14 +164,61 @@ async def _action(request, validate):
             **({"sound": cfg.sound} if cfg.sound else {}),
         }
     )
-    result = await get_sender().send(
-        token_file=cfg.token_file,
-        key_file=cfg.key_file,
-        message=message,
-        timeout_ms=cfg.timeout_ms,
-        validate=validate,
+    recipients = {
+        key: entry
+        for key, entry in cfg.recipients.items()
+        if selected is None or key == selected
+    }
+    deliveries = {
+        key: {"label": entry.label, "delivery_status": "disabled"}
+        for key, entry in recipients.items()
+        if not entry.enabled
+    }
+    enabled = {key: entry for key, entry in recipients.items() if entry.enabled}
+    token = await read_key(cfg.token_file)
+    secrets = await asyncio.gather(
+        *(read_key(entry.key_file) for entry in enabled.values())
     )
-    return {**result, "credential_refs": refs}
+    owners, aliases, targets = {}, {}, {}
+    for (key, entry), secret in zip(enabled.items(), secrets):
+        identity = (token, secret) if token and secret else None
+        if identity and identity in owners:
+            aliases[key] = owners[identity]
+        else:
+            targets[key] = entry
+            if identity:
+                owners[identity] = key
+
+    async def send(key, entry):
+        try:
+            result = await get_sender().send(
+                token_file=cfg.token_file,
+                key_file=entry.key_file,
+                message=message,
+                timeout_ms=cfg.timeout_ms,
+                validate=validate,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            result = {
+                "delivery_status": "uncertain",
+                "error_code": "transport_unavailable",
+            }
+        deliveries[key] = {"label": entry.label, **result}
+
+    await asyncio.gather(*(send(key, entry) for key, entry in targets.items()))
+    for key, original in aliases.items():
+        deliveries[key] = {
+            **deliveries[original],
+            "label": enabled[key].label,
+            "deduplicated": True,
+        }
+    return {
+        **delivery_outcome(deliveries),
+        "notification_deliveries": deliveries,
+        "credential_refs": refs,
+    }
 
 
 @router.post("/validate")

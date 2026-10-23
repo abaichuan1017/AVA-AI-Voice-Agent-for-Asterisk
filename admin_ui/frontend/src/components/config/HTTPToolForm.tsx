@@ -20,7 +20,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { ToolEditorSurface } from './ToolEditorSurface';
 import { PushoverToolFields } from './PushoverToolFields';
-import { pushoverDocument } from './pushoverToolConfig';
+import { pushoverDocument, credentialPayload, applyPushoverRefs, type PushoverCredentials } from './pushoverToolConfig';
 
 const BODY_CAPABLE_HTTP_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const isBodyCapableHTTPMethod = (method?: string) =>
@@ -144,7 +144,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
     const [toolForm, setToolForm] = useState<any>({});
-    const [pushoverCredentials, setPushoverCredentials] = useState({token: '', recipient: ''});
+    const [pushoverCredentials, setPushoverCredentials] = useState<PushoverCredentials>({token: '', recipients: {}});
     const [savingPushover, setSavingPushover] = useState(false);
     const [headerKey, setHeaderKey] = useState('');
     const [headerValue, setHeaderValue] = useState('');
@@ -232,7 +232,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
     };
 
     const closeEditor = () => {
-        setPushoverCredentials({token: "", recipient: ""});
+        setPushoverCredentials({token: "", recipients: {}});
         setEditingTool(null);
         resetDraftRows();
         setTestResult(null);
@@ -263,7 +263,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
     const httpTools = getHTTPTools();
 
     const handleAddTool = () => {
-        setPushoverCredentials({token: "", recipient: ""});
+        setPushoverCredentials({token: "", recipients: {}});
         resetDraftRows();
         setTestResult(null);
         setShowTestPanel(false);
@@ -309,7 +309,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
         setShowTestPanel(false);
         setShowAllMappings(false);
         setEditingTool(key);
-        setPushoverCredentials({token: "", recipient: ""});
+        setPushoverCredentials({token: "", recipients: {}});
         setToolForm({ key, ...data });
     };
 
@@ -382,8 +382,8 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                 toast.error('Choose a unique tool name using letters, numbers and underscores');
                 return;
             }
-            const credentials = Object.fromEntries(Object.entries(pushoverCredentials).filter(([, value]) => Boolean(value)));
-            if (Object.values(credentials).some(value => !/^[A-Za-z0-9]{30}$/.test(value))) {
+            const credentials = credentialPayload(pushoverCredentials);
+            if ([...(credentials.token ? [credentials.token] : []), ...Object.values(credentials.recipients || {})].some(value => !/^[A-Za-z0-9]{30}$/.test(value))) {
                 toast.error('Pushover credentials require 30 alphanumeric characters');
                 return;
             }
@@ -391,8 +391,8 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
             try {
                 if (Object.keys(credentials).length) {
                     const response = await axios.post('/api/pushover/credentials', credentials);
-                    committedToolForm = {...committedToolForm, ...response.data};
-                    setPushoverCredentials({token: '', recipient: ''});
+                    committedToolForm = applyPushoverRefs(committedToolForm, response.data);
+                    setPushoverCredentials({token: '', recipients: {}});
                 }
             } catch {
                 toast.error('Unable to store credentials. Tool changes have not been staged.');
@@ -803,8 +803,9 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                     <FormSelect label="Tool type" value={toolForm.kind === 'pushover' ? 'pushover' : 'http'} disabled={editingTool !== 'new_tool'} options={[{value: 'http', label: 'HTTP'}, {value: 'pushover', label: 'Pushover'}]} onChange={e => {
                         const kind = e.target.value === 'pushover' ? 'pushover' : ({pre_call: 'generic_http_lookup', in_call: 'in_call_http_lookup', post_call: 'generic_webhook'}[phase]);
                         setToolForm({...toolForm, kind, priority: 0, summary_prompt: recommendedSummaryPrompt, summary_failure_policy: 'continue'});
-                        setPushoverCredentials({token: '', recipient: ''});
+                        setPushoverCredentials({token: '', recipients: {}});
                     }} />
+                    {toolForm.kind === 'pushover' && <p className="text-sm text-muted-foreground"><a href="https://pushover.net/api" target="_blank" rel="noopener noreferrer" className="text-primary underline">Official Pushover documentation: application tokens, users and delivery groups</a></p>}
                     <FormInput
                         label="Tool Name"
                         value={toolForm.key || ''}

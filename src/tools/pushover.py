@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from src.integrations.pushover import (
     PushoverToolConfig,
+    delivery_outcome,
     read_key,
     get_sender,
     render_message,
@@ -162,19 +163,21 @@ class PushoverTool(Tool):
         }
         try:
             result = await asyncio.wait_for(
-                self._execute(params, context), self.definition.timeout_ms / 1000
+                self._execute(params, context, result),
+                self.definition.timeout_ms / 1000,
             )
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
-            result.update(status="timeout", delivery_status="timeout")
+            result.update(status="timeout")
+            result.setdefault("error_code", "timeout")
         except Exception:
             result.update(status="error", error_code="notification_unavailable")
         if hasattr(context, "execution_results"):
             context.execution_results[self.definition.name] = result
         return {} if self.phase == "pre_call" else result
 
-    async def _execute(self, params, context):
+    async def _execute(self, params, context, progress):
         base = {
             "status": "skipped",
             "internal_notification": True,
@@ -253,15 +256,13 @@ class PushoverTool(Tool):
             outcome=outcome,
         )
         values["meeting"] = verified_meeting(tool_calls)[:160]
-        # Credential identity is used only for conservative suppression, never exposed.
-        token, recipient = await asyncio.gather(
-            read_key(self.config.token_file), read_key(self.config.key_file)
-        )
-        identity = (
-            hashlib.sha256((token + ":" + recipient).encode()).hexdigest()
-            if token and recipient
-            else None
-        )
+        recipients = self.config.recipients
+        deliveries = {
+            key: {"label": entry.label, "delivery_status": "disabled"}
+            for key, entry in recipients.items()
+            if not entry.enabled
+        }
+        enabled = {key: entry for key, entry in recipients.items() if entry.enabled}
         async with state.lock:
             if event in state.events:
                 return {**base, **state.events[event], "deduplicated": True}
@@ -271,21 +272,51 @@ class PushoverTool(Tool):
                     "delivery_status": "capacity",
                     "error_code": "call_event_limit",
                 }
-            prior = state.briefings.get(self.config.suppress_after_tool)
-            if (
-                self.phase == "post_call"
-                and outcome == "transferred"
-                and prior
-                and identity
-                and prior["identity"] == identity
-                and destination in prior["aliases"]
-                and attempts == prior["attempts"] + 1
-            ):
-                result = {**base, "status": "success", "delivery_status": "suppressed"}
-                state.events[event] = result
-                return result
-            diagnostics = {}
-            if self.config.generate_summary:
+            state.events[event] = {"status": "skipped", "delivery_status": "pending"}
+        progress.update(
+            base, delivery_status="skipped", notification_deliveries=deliveries
+        )
+        duplicates = {}
+        try:
+            # Resolve credential identities privately to avoid duplicate sends under
+            # different row names and suppress completion only for matching recipients.
+            token = await read_key(self.config.token_file)
+            keys = await asyncio.gather(
+                *(read_key(entry.key_file) for entry in enabled.values())
+            )
+            identities = {
+                key: (
+                    hashlib.sha256((token + ":" + secret).encode()).hexdigest()
+                    if token and secret
+                    else None
+                )
+                for key, secret in zip(enabled, keys)
+            }
+            prior = state.briefings.get(self.config.suppress_after_tool) or {}
+            targets = {}
+            duplicates = {}
+            owners = {}
+            for key, entry in enabled.items():
+                identity = identities[key]
+                briefing = prior.get(identity) if identity else None
+                if (
+                    self.phase == "post_call"
+                    and outcome == "transferred"
+                    and briefing
+                    and destination in briefing["aliases"]
+                    and attempts == briefing["attempts"] + 1
+                ):
+                    deliveries[key] = {
+                        "label": entry.label,
+                        "delivery_status": "suppressed",
+                    }
+                elif identity and identity in owners:
+                    duplicates[key] = owners[identity]
+                else:
+                    targets[key] = entry
+                    if identity:
+                        owners[identity] = key
+            if targets and self.config.generate_summary:
                 generator = getattr(context, "summary_generator", None) or getattr(
                     getattr(context, "tool_registry", None), "summary_generator", None
                 )
@@ -299,51 +330,92 @@ class PushoverTool(Tool):
                 values.update(
                     {key: summary_values[key] for key in ("summary", "summary_status")}
                 )
+                progress.update(diagnostics)
                 if (
                     values["summary_status"] != "ok"
                     and self.config.summary_failure_policy == "abort"
                 ):
-                    result = {
-                        **base,
-                        **diagnostics,
-                        "delivery_status": "skipped",
-                        "error_code": "summary_unavailable",
-                    }
-                    state.events[event] = result
-                    return result
+                    progress["error_code"] = "summary_unavailable"
+                    for key, entry in targets.items():
+                        deliveries[key] = {
+                            "label": entry.label,
+                            "delivery_status": "skipped",
+                        }
+                    return progress
             if self.phase == "in_call":
                 live = await context.get_session()
                 if getattr(live, "cleanup_in_progress", False) or getattr(
                     live, "cleanup_completed", False
                 ):
-                    return {**base, **diagnostics, "delivery_status": "skipped"}
-            state.events[event] = {"status": "error", "delivery_status": "uncertain"}
-            sent = await self.sender.send(
-                token_file=self.config.token_file,
-                key_file=self.config.key_file,
-                message=render_message(self.config, self.phase, values),
-                timeout_ms=self.config.timeout_ms,
+                    return progress
+            message = render_message(self.config, self.phase, values)
+
+            async def send_one(key, entry):
+                # Conservative reservation before entering a cancellable sender.
+                deliveries[key] = {"label": entry.label, "delivery_status": "uncertain"}
+                try:
+                    sent = await self.sender.send(
+                        token_file=self.config.token_file,
+                        key_file=entry.key_file,
+                        message=message,
+                        timeout_ms=self.config.timeout_ms,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    sent = {
+                        "delivery_status": "uncertain",
+                        "error_code": "transport_unavailable",
+                    }
+                deliveries[key] = {"label": entry.label, **sent}
+                if (
+                    self.phase == "in_call"
+                    and sent["delivery_status"] == "accepted"
+                    and identities[key]
+                ):
+                    destinations = (
+                        context.get_config_value("tools.transfer.destinations", {})
+                        or {}
+                    )
+                    target = destinations.get(self.config.destination_key) or {}
+                    aliases = [self.config.destination_key] + [
+                        str(target.get(k) or "")
+                        for k in ("description", "target", "name")
+                    ]
+                    async with state.lock:
+                        state.briefings.setdefault(self.definition.name, {})[
+                            identities[key]
+                        ] = {"aliases": [a for a in aliases if a], "attempts": attempts}
+
+            await asyncio.gather(
+                *(send_one(key, entry) for key, entry in targets.items())
             )
-            if self.phase == "in_call" and sent["delivery_status"] == "accepted":
-                destinations = (
-                    context.get_config_value("tools.transfer.destinations", {}) or {}
-                )
-                target = destinations.get(self.config.destination_key) or {}
-                aliases = [self.config.destination_key] + [
-                    str(target.get(k) or "") for k in ("description", "target", "name")
-                ]
-                state.briefings[self.definition.name] = {
-                    "identity": identity,
-                    "aliases": [a for a in aliases if a],
-                    "attempts": attempts,
+            for key, original in duplicates.items():
+                deliveries[key] = {
+                    **deliveries[original],
+                    "label": enabled[key].label,
+                    "deduplicated": True,
                 }
-            result = {
-                **base,
-                **diagnostics,
-                **sent,
-                "status": (
-                    "success" if sent["delivery_status"] == "accepted" else "error"
-                ),
-            }
-            state.events[event] = result
-            return result
+            progress.update(delivery_outcome(deliveries))
+            return progress
+        except asyncio.CancelledError:
+            # Keep accepted rows and uncertain in-flight sends; never blindly replay.
+            if deliveries:
+                progress.update(delivery_outcome(deliveries))
+            raise
+        finally:
+            for key, entry in enabled.items():
+                if key not in deliveries:
+                    original = duplicates.get(key)
+                    deliveries[key] = (
+                        {
+                            **deliveries[original],
+                            "label": entry.label,
+                            "deduplicated": True,
+                        }
+                        if original in deliveries
+                        else {"label": entry.label, "delivery_status": "skipped"}
+                    )
+            progress.update(delivery_outcome(deliveries))
+            async with state.lock:
+                state.events[event] = copy.deepcopy(progress)

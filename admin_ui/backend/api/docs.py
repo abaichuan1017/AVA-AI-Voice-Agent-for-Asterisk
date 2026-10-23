@@ -20,6 +20,7 @@ DOC_CATEGORIES = {
             {"file": "FreePBX-Integration-Guide.md", "title": "FreePBX Integration", "description": "Dialplan and queue configuration"},
             {"file": "Configuration-Reference.md", "title": "Configuration Reference", "description": "All YAML settings explained"},
             {"file": "TOOL_CALLING_GUIDE.md", "title": "Tool Calling Guide", "description": "AI-powered actions and integrations"},
+            {"file": "Pushover.md", "title": "Pushover Tool", "description": "Named notifications, recipients/groups, summaries and testing"},
             {"file": "TROUBLESHOOTING_GUIDE.md", "title": "Troubleshooting", "description": "Common issues and solutions"},
         ]
     },
