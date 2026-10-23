@@ -130,8 +130,10 @@ export default function PushoverPanel({ onSaved }: { onSaved: () => void }) {
         if (!config) return;
         setBusy(true);
         setStatus('Saving…');
+        let settingsSaved = false;
         try {
             await axios.put('/api/pushover', writable(config));
+            settingsSaved = true;
             if (token) {
                 await axios.put('/api/pushover/credentials/application', { value: token });
                 setToken('');
@@ -153,6 +155,16 @@ export default function PushoverPanel({ onSaved }: { onSaved: () => void }) {
                 'Saved. Apply to new calls using Apply settings below. Active calls retain their captured configuration.'
             );
         } catch {
+            if (settingsSaved) {
+                onSaved();
+                try {
+                    const result = await axios.get('/api/pushover');
+                    setConfig(result.data);
+                    setDirty(false);
+                } catch {
+                    // Keep the local draft available if the refresh also fails.
+                }
+            }
             setStatus(
                 'Save did not complete. Check identifiers, summary provider readiness and key format, then retry. Earlier successful changes remain saved.'
             );
@@ -671,9 +683,15 @@ export default function PushoverPanel({ onSaved }: { onSaved: () => void }) {
                         onClick={async () => {
                             setBusy(true);
                             try {
-                                await axios.post('/api/system/containers/ai_engine/reload');
+                                const response = await axios.post(
+                                    '/api/system/containers/ai_engine/reload'
+                                );
+                                if (response.data?.success === false)
+                                    throw new Error('Reload failed');
                                 setStatus(
-                                    'Applied to new calls. Active calls keep their captured configuration.'
+                                    response.data?.restart_required
+                                        ? 'Settings saved; some changes require an engine restart. Active calls keep their captured configuration.'
+                                        : 'Applied to new calls. Active calls keep their captured configuration.'
                                 );
                                 onSaved();
                             } catch {

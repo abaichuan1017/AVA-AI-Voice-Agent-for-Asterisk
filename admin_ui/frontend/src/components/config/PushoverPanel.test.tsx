@@ -113,4 +113,33 @@ describe('native Pushover panel', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Add recipient' }));
         expect(screen.getByLabelText('User/group key (operations)')).toBeInTheDocument();
     });
+    it('refreshes parent configuration after settings save and credential failure', async () => {
+        const saved = vi.fn();
+        vi.mocked(axios.put).mockImplementation(async url => {
+            if (url !== '/api/pushover') throw new Error('Credential rejected');
+            return { data: {} };
+        });
+        render(<PushoverPanel onSaved={saved} />);
+        await screen.findByRole('heading', { name: 'Pushover notifications' });
+        fireEvent.change(screen.getByLabelText('Application token'), {
+            target: { value: 'pending-key' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Save Pushover settings' }));
+        await screen.findByText(/Save did not complete/);
+        expect(saved).toHaveBeenCalledOnce();
+        expect(
+            vi.mocked(axios.get).mock.calls.filter(([url]) => url === '/api/pushover')
+        ).toHaveLength(2);
+        expect(screen.getByLabelText('Application token')).toHaveValue('pending-key');
+    });
+    it('reports partial apply when the engine requires a restart', async () => {
+        vi.mocked(axios.post).mockResolvedValue({
+            data: { success: true, restart_required: true },
+        });
+        render(<PushoverPanel onSaved={vi.fn()} />);
+        await screen.findByRole('heading', { name: 'Pushover notifications' });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply settings' }));
+        await screen.findByText(/some changes require an engine restart/);
+        expect(screen.queryByText(/^Applied to new calls/)).not.toBeInTheDocument();
+    });
 });

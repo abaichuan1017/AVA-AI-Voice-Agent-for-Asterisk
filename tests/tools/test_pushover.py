@@ -622,3 +622,28 @@ async def test_completion_reports_actual_destination_and_requires_verified_meeti
         }
     )
     assert verified_meeting(rows) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_sender_supports_backend_python_without_asyncio_timeout(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delattr(asyncio, "timeout", raising=False)
+    token = tmp_path / "token"
+    recipient = tmp_path / "recipient"
+    token.write_text("a" * 30)
+    recipient.write_text("b" * 30)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"status": 1})
+    )
+    sender = PushoverSender(
+        lock_dir=tmp_path / "locks",
+        client_factory=lambda **kwargs: httpx.AsyncClient(
+            transport=transport, **kwargs
+        ),
+    )
+    result = await sender.send(
+        token_file=str(token), key_file=str(recipient), message={"message": "Synthetic"}
+    )
+    assert result["delivery_status"] == "accepted"
+    assert sender._pending == 0

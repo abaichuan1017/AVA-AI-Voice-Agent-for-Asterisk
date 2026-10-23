@@ -257,89 +257,91 @@ class PushoverSender:
             return {"delivery_status": "capacity", "error_code": "queue_full"}
         self._pending += 1
         dispatched = False
-        try:
-            async with asyncio.timeout(timeout_ms / 1000):
-                token, user = await asyncio.gather(
-                    read_key(token_file), read_key(key_file)
-                )
-                if not token or not user:
-                    return {
-                        "delivery_status": "rejected",
-                        "error_code": "credentials_unavailable",
-                    }
-                async with self._semaphore, self._lease():
-                    payload = {"token": token, "user": user, **(message or {})}
-                    # Authority-bearing fields never come from content or model arguments.
-                    payload["token"], payload["user"] = token, user
-                    endpoint = "users/validate" if validate else "messages"
-                    async with self.client_factory(
-                        timeout=timeout_ms / 1000,
-                        follow_redirects=False,
-                        trust_env=False,
-                    ) as client:
-                        dispatched = True
-                        async with client.stream(
-                            "POST",
-                            f"https://api.pushover.net/1/{endpoint}.json",
-                            data=payload,
-                        ) as response:
-                            raw = bytearray()
-                            async for chunk in response.aiter_bytes():
-                                if len(raw) + len(chunk) > 16384:
-                                    return {
-                                        "delivery_status": "uncertain",
-                                        "error_code": "oversized_response",
-                                    }
-                                raw.extend(chunk)
-                            try:
-                                data = json.loads(raw)
-                            except (ValueError, UnicodeError):
-                                data = None
-                            if (
-                                response.status_code == 200
-                                and isinstance(data, dict)
-                                and type(data.get("status")) is int
-                                and data.get("status") == 1
-                            ):
+
+        async def operation():
+            nonlocal dispatched
+            token, user = await asyncio.gather(read_key(token_file), read_key(key_file))
+            if not token or not user:
+                return {
+                    "delivery_status": "rejected",
+                    "error_code": "credentials_unavailable",
+                }
+            async with self._semaphore, self._lease():
+                payload = {"token": token, "user": user, **(message or {})}
+                # Authority-bearing fields never come from content or model arguments.
+                payload["token"], payload["user"] = token, user
+                endpoint = "users/validate" if validate else "messages"
+                async with self.client_factory(
+                    timeout=timeout_ms / 1000,
+                    follow_redirects=False,
+                    trust_env=False,
+                ) as client:
+                    dispatched = True
+                    async with client.stream(
+                        "POST",
+                        f"https://api.pushover.net/1/{endpoint}.json",
+                        data=payload,
+                    ) as response:
+                        raw = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(raw) + len(chunk) > 16384:
                                 return {
-                                    "delivery_status": "accepted",
-                                    "http_status": 200,
+                                    "delivery_status": "uncertain",
+                                    "error_code": "oversized_response",
                                 }
-                            if (
-                                400 <= response.status_code < 500
-                                or isinstance(data, dict)
-                                and data.get("status") == 0
-                            ):
-                                if len(self._blocked) >= 512:
-                                    self._blocked = {
-                                        key: expiry
-                                        for key, expiry in self._blocked.items()
-                                        if expiry > time.monotonic()
-                                    }
-                                if len(self._blocked) < 512:
-                                    blocked_key = (
-                                        (token_file, "*")
-                                        if response.status_code == 429
-                                        else fingerprint
-                                    )
-                                    self._blocked[blocked_key] = time.monotonic() + 300
-                                return {
-                                    "delivery_status": "rejected",
-                                    "http_status": response.status_code,
-                                    "error_code": (
-                                        "quota_exceeded"
-                                        if response.status_code == 429
-                                        else "api_rejected"
-                                    ),
-                                }
+                            raw.extend(chunk)
+                        try:
+                            data = json.loads(raw)
+                        except (ValueError, UnicodeError):
+                            data = None
+                        if (
+                            response.status_code == 200
+                            and isinstance(data, dict)
+                            and type(data.get("status")) is int
+                            and data.get("status") == 1
+                        ):
                             return {
-                                "delivery_status": "uncertain",
-                                "http_status": response.status_code,
-                                "error_code": "invalid_or_transient_response",
+                                "delivery_status": "accepted",
+                                "http_status": 200,
                             }
+                        if (
+                            400 <= response.status_code < 500
+                            or isinstance(data, dict)
+                            and data.get("status") == 0
+                        ):
+                            if len(self._blocked) >= 512:
+                                self._blocked = {
+                                    key: expiry
+                                    for key, expiry in self._blocked.items()
+                                    if expiry > time.monotonic()
+                                }
+                            if len(self._blocked) < 512:
+                                blocked_key = (
+                                    (token_file, "*")
+                                    if response.status_code == 429
+                                    else fingerprint
+                                )
+                                self._blocked[blocked_key] = time.monotonic() + 300
+                            return {
+                                "delivery_status": "rejected",
+                                "http_status": response.status_code,
+                                "error_code": (
+                                    "quota_exceeded"
+                                    if response.status_code == 429
+                                    else "api_rejected"
+                                ),
+                            }
+                        return {
+                            "delivery_status": "uncertain",
+                            "http_status": response.status_code,
+                            "error_code": "invalid_or_transient_response",
+                        }
+
+        try:
+            return await asyncio.wait_for(operation(), timeout_ms / 1000)
         except asyncio.CancelledError:
             raise
-        except TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             return {
                 "delivery_status": "uncertain" if dispatched else "timeout",
                 "error_code": "timeout",
