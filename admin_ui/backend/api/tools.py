@@ -1322,6 +1322,8 @@ def _validate_tool_name(name: str) -> None:
         )
     if name in RESERVED_TOOL_NAMES:
         raise HTTPException(status_code=422, detail=f"'{name}' is a reserved tool name")
+    if name in {"pushover_arrival", "pushover_briefing", "pushover_completion"}:
+        raise HTTPException(status_code=422, detail="This name is reserved for native Pushover")
     if name.startswith("mcp_"):
         raise HTTPException(status_code=422, detail="Tool names starting with 'mcp_' are reserved for MCP tools")
     if name in _reserved_builtin_names():

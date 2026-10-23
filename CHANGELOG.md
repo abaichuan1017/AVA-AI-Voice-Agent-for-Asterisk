@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Opt-in native Pushover with per-agent arrival, briefing and completion settings, masked credentials, UI preview/validation/tests, scoped delivery and best-effort duplicate protection.
 - Provider-backed in-call HTTP summaries with safe placeholders, failure policy, combined timeout budgets and independent generation diagnostics.
 
 

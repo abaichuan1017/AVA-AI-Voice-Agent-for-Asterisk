@@ -233,6 +233,8 @@ class CallSession:
     error_message: Optional[str] = None                              # Error if call failed
     transfer_destination: Optional[str] = None                       # Transfer target if transferred
     
+    notification_state: Any = None  # bounded, in-memory Pushover event ownership
+
     # Pre-call tool results (Milestone 24) - CRM lookup data injected into prompts
     pre_call_results: Dict[str, str] = field(default_factory=dict)  # {variable_name: value}
 

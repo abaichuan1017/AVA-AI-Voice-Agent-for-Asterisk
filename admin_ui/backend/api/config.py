@@ -1379,6 +1379,16 @@ def _redact_websocket_media_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
         # so operators know exactly which ai_engine env var is required.
         for key in ("password", "secret", "token"):
             auth.pop(key, None)
+    pushover = safe.get("pushover") if isinstance(safe, dict) else None
+    if isinstance(pushover, dict):
+        for key in ("token", "application_token", "app_token"):
+            pushover.pop(key, None)
+        recipients = pushover.get("recipients")
+        if isinstance(recipients, dict):
+            for recipient in recipients.values():
+                if isinstance(recipient, dict):
+                    for key in ("key", "user", "user_key", "group_key"):
+                        recipient.pop(key, None)
     return safe
 
 

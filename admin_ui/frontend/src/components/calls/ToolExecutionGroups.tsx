@@ -4,7 +4,35 @@ export type ToolPhase = 'pre_call' | 'in_call' | 'post_call';
 
 export type ToolExecutionStatus = 'pending' | 'ok' | 'error' | 'timeout' | 'skipped';
 
-export interface PhaseToolCall {
+interface ToolDiagnostics {
+    summary_provider?: string | null;
+    summary_model?: string | null;
+    summary_status?: string | null;
+    summary_duration_ms?: number | null;
+    summary_error_code?: string | null;
+    delivery_status?: string | null;
+    notification_deliveries?: Record<string, {delivery_status: string; error_code?: string}> | null;
+}
+
+const ToolDiagnosticsView = ({entry}: {entry: ToolDiagnostics}) => <>
+    {entry.summary_status && <div className="mt-2 rounded bg-background/50 p-2 text-xs">
+        <span className="font-medium">AI summary</span>
+        <div className="mt-1 flex flex-wrap gap-x-3 text-muted-foreground">
+            <span>Status: {entry.summary_status}</span>
+            {entry.summary_provider && <span>Provider: {entry.summary_provider}</span>}
+            {entry.summary_model && <span>Model: {entry.summary_model}</span>}
+            {typeof entry.summary_duration_ms === 'number' && <span>{Math.round(entry.summary_duration_ms)}ms</span>}
+            {entry.summary_error_code && <span>Error: {entry.summary_error_code}</span>}
+        </div>
+    </div>}
+    {entry.delivery_status && <div className="mt-2 rounded bg-background/50 p-2 text-xs">
+        <span className="font-medium">Delivery: {entry.delivery_status}</span>
+        {Object.entries(entry.notification_deliveries || {}).map(([key,result])=><div key={key}>{key}: {result.delivery_status}{result.error_code && ` (${result.error_code})`}</div>)}
+        <p className="text-muted-foreground mt-1">Accepted means queued by the service, not displayed or read.</p>
+    </div>}
+</>;
+
+export interface PhaseToolCall extends ToolDiagnostics {
     name: string;
     kind?: string | null;
     phase: ToolPhase;
@@ -24,7 +52,7 @@ export interface PhaseToolCall {
     attempt?: number | null;
 }
 
-export interface InCallToolCall {
+export interface InCallToolCall extends ToolDiagnostics {
     type?: 'tool_result';
     call_id?: string;
     tool_call_id?: string;
@@ -89,22 +117,7 @@ export const PhaseToolGroup = ({ phase, entries }: { phase: Exclude<ToolPhase, '
                         {entry.error_message && (
                             <div className="mt-2 text-xs text-red-500/90 break-words">{entry.error_message}</div>
                         )}
-                        {entry.summary_status && (
-                            <div className="mt-2 rounded bg-background/50 p-2 text-xs">
-                                <div className="font-medium">AI summary</div>
-                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
-                                    <span>Status: {entry.summary_status}</span>
-                                    {entry.summary_provider && <span>Provider: {entry.summary_provider}</span>}
-                                    {entry.summary_model && <span>Model: {entry.summary_model}</span>}
-                                    {typeof entry.summary_duration_ms === 'number' && (
-                                        <span>{Math.round(entry.summary_duration_ms)}ms</span>
-                                    )}
-                                    {entry.summary_error_code && (
-                                        <span className="text-red-500/90">Error: {entry.summary_error_code}</span>
-                                    )}
-                                </div>
-                            </div>
-                        )}
+                        <ToolDiagnosticsView entry={entry} />
                         {entry.response_summary && (
                             <pre className="mt-2 text-xs bg-background/50 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">
                                 {entry.response_summary}
@@ -182,6 +195,7 @@ export const InCallToolGroup = ({ entries }: { entries: InCallToolCall[] }) => {
                                 Invocation: <span className="font-mono">{invocationId}</span>
                             </div>
                         )}
+                        <ToolDiagnosticsView entry={tool} />
                         {tool.message && <div className="mt-2 text-xs text-muted-foreground break-words">{tool.message}</div>}
                         {hasParams && (
                             <pre className="mt-2 text-xs bg-background/50 rounded p-2 overflow-x-auto">

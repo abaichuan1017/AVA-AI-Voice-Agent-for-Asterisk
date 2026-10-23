@@ -10,13 +10,14 @@ import { ConfigCard } from '../components/ui/ConfigCard';
 import { ToolList } from '../components/config/ToolList';
 import { ToolSection, toolSections, toolDefaults } from '../components/config/toolSections';
 import ToolForm from '../components/config/ToolForm';
+import PushoverPanel from '../components/config/PushoverPanel';
 import HTTPToolForm from '../components/config/HTTPToolForm';
 import { useAuth } from '../auth/AuthContext';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { getCachedConfig, loadConfigYaml } from '../utils/configCache';
 import { useRestartRequired } from '../hooks/useRestartRequired';
 
-type ToolPhase = 'in_call' | 'pre_call' | 'post_call' | 'catalog';
+type ToolPhase = 'in_call' | 'pre_call' | 'post_call' | 'catalog' | 'pushover';
 
 type ToolParam = {
     name: string;
@@ -438,9 +439,9 @@ const ToolsPage = () => {
                     </div>
                 </div>
                 <div className="flex gap-6 border-b border-border" aria-label="Call phase">
-                    {(['pre_call', 'in_call', 'post_call'] as const).map(phase => (
-                        <button type="button" key={phase} aria-pressed={activePhase === phase} onClick={() => setActivePhase(phase)} className={`pb-3 text-sm border-b-2 ${activePhase === phase ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'}`}>
-                            {{ pre_call: 'Pre-Call', in_call: 'In-Call', post_call: 'Post-Call' }[phase]}
+                    {(['pre_call', 'in_call', 'post_call', 'pushover'] as const).map(phase => (
+                        <button type="button" key={phase} disabled={phase === 'pushover' && dirty} title={phase === 'pushover' && dirty ? 'Save other tool changes first' : undefined} aria-pressed={activePhase === phase} onClick={() => setActivePhase(phase)} className={`pb-3 text-sm border-b-2 ${activePhase === phase ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground'}`}>
+                            {{ pre_call: 'Pre-Call', in_call: 'In-Call', post_call: 'Post-Call', pushover: 'Pushover' }[phase]}
                         </button>
                     ))}
                 </div>
@@ -476,6 +477,7 @@ const ToolsPage = () => {
                 </fieldset>
             </div>
 
+            {!selectedSection && activePhase === 'pushover' && <PushoverPanel onSaved={() => void fetchConfig(true)} />}
             {(['pre_call', 'in_call', 'post_call'] as const).map(phase => (
                 <div key={phase} hidden={!!selectedSection || activePhase !== phase}>
                     <fieldset disabled={saving} className="min-w-0">
