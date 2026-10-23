@@ -716,3 +716,108 @@ async def test_pre_call_notifications_are_concurrent_after_enrichment():
     assert all(
         row["delivery_status"] == "accepted" for row in session.pre_call_tool_calls
     )
+
+
+@pytest.mark.asyncio
+async def test_phase_dispatch_cancellation_keeps_per_recipient_diagnostics():
+    entered = asyncio.Event()
+
+    async def send(**kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    notify = tool("pre_call", sender=SimpleNamespace(send=send))
+    context = PreCallContext(call_id="synthetic-cancel", caller_number="+15550102030")
+    task = asyncio.create_task(notify.execute(context))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    result = context.execution_results[notify.definition.name]
+    assert result["status"] == "cancelled"
+    assert result["notification_deliveries"]["legacy"]["delivery_status"] == "uncertain"
+
+
+@pytest.mark.asyncio
+async def test_validation_bypasses_and_never_sets_delivery_cooldowns(tmp_path):
+    token = tmp_path / "app"
+    user = tmp_path / "user"
+    token.write_text("a" * 30)
+    user.write_text("b" * 30)
+    seen = []
+    responses = [
+        (400, {"status": 0}),
+        (400, {"status": 0}),
+        (200, {"status": 1}),
+        (429, {"status": 0}),
+        (200, {"status": 1}),
+    ]
+
+    async def handle(request):
+        seen.append(request.url.path)
+        status, payload = responses.pop(0)
+        return httpx.Response(status, json=payload)
+
+    sender = PushoverSender(
+        lock_dir=tmp_path / "locks",
+        client_factory=lambda **kw: httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), **kw
+        ),
+    )
+    args = {"token_file": str(token), "key_file": str(user)}
+    assert (await sender.send(**args, validate=True))["delivery_status"] == "rejected"
+    assert sender._blocked == {}
+    assert (await sender.send(**args, message={"message": "synthetic"}))[
+        "delivery_status"
+    ] == "rejected"
+    assert (await sender.send(**args, validate=True))["delivery_status"] == "accepted"
+    assert (await sender.send(**args))["error_code"] == "rejection_cooldown"
+    sender._blocked.clear()
+    assert (await sender.send(**args))["error_code"] == "quota_exceeded"
+    assert (await sender.send(**args, validate=True))["delivery_status"] == "accepted"
+    assert (await sender.send(**args))["error_code"] == "rejection_cooldown"
+    assert seen == [
+        "/1/users/validate.json",
+        "/1/messages.json",
+        "/1/users/validate.json",
+        "/1/messages.json",
+        "/1/users/validate.json",
+    ]
+
+
+@pytest.mark.parametrize("in_call", [True, False])
+def test_legacy_initializers_reject_invalid_native_entries_without_replacing_tools(
+    in_call, caplog
+):
+    from src.tools.registry import ToolRegistry
+
+    registry = ToolRegistry.isolated()
+    registry.initialize_default_tools()
+    original = registry.get("hangup_call")
+    phase = "in_call" if in_call else "post_call"
+    valid = configured(phase).model_dump()
+    docs = {
+        "hangup_call": valid,
+        "mcp_fake": valid,
+        "bad-name": valid,
+        "invalid": {**valid, "priority": 2, "token": "private-synthetic-marker"},
+        "wrong_phase": configured("pre_call" if in_call else "in_call").model_dump(),
+        "good_notice": valid,
+    }
+    initialize = (
+        registry.initialize_in_call_http_tools_from_config
+        if in_call
+        else registry.initialize_http_tools_from_config
+    )
+    initialize(docs)
+    assert registry.get("hangup_call") is original
+    assert registry.get("good_notice").phase == phase
+    assert not any(
+        registry.has(name)
+        for name in ("mcp_fake", "bad-name", "invalid", "wrong_phase")
+    )
+    assert "private-synthetic-marker" not in caplog.text
+    # A later per-agent initializer also cannot replace an already captured tool.
+    captured = registry.get("good_notice")
+    initialize({"good_notice": {**valid, "description": "replacement"}})
+    assert registry.get("good_notice") is captured

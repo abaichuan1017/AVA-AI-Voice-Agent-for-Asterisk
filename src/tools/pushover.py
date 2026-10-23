@@ -167,14 +167,16 @@ class PushoverTool(Tool):
                 self.definition.timeout_ms / 1000,
             )
         except asyncio.CancelledError:
+            result.update(status="cancelled", error_code="cancelled")
             raise
         except asyncio.TimeoutError:
             result.update(status="timeout")
             result.setdefault("error_code", "timeout")
         except Exception:
             result.update(status="error", error_code="notification_unavailable")
-        if hasattr(context, "execution_results"):
-            context.execution_results[self.definition.name] = result
+        finally:
+            if hasattr(context, "execution_results"):
+                context.execution_results[self.definition.name] = result
         return {} if self.phase == "pre_call" else result
 
     async def _execute(self, params, context, progress):

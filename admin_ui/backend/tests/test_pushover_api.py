@@ -264,3 +264,32 @@ def test_clearing_recipient_map_cannot_revive_legacy_key(client):
     assert response.status_code == 200
     config = state["in_call_tools"]["legacy_notice"]
     assert config["recipients"] == {} and config["key_file"] == ""
+
+
+@pytest.mark.parametrize(
+    "phase,http_kind",
+    [
+        ("pre_call", "generic_http_lookup"),
+        ("in_call", "in_call_http_lookup"),
+        ("post_call", "generic_webhook"),
+    ],
+)
+def test_patch_cannot_convert_pushover_to_http(client, phase, http_kind):
+    browser, state, _, _ = client
+    created = browser.post(
+        "/api/tools/managed",
+        json={"name": "native_notice", "kind": "pushover", "phase": phase},
+    )
+    assert created.status_code == 201, created.text
+    before = copy.deepcopy(state)
+    rejected = browser.patch(
+        "/api/tools/managed/native_notice", json={"kind": http_kind}
+    )
+    assert rejected.status_code == 422 and state == before
+    for kind_patch in ({}, {"kind": "pushover"}):
+        assert (
+            browser.patch(
+                "/api/tools/managed/native_notice", json=kind_patch
+            ).status_code
+            == 200
+        )

@@ -118,7 +118,7 @@ and suppressed results, including per-recipient labels and a partial aggregate r
 Disabled rows appear as disabled. One rejection does not turn other accepted
 recipients into failures or cause an automatic retry. Acceptance means API queuing, not phone display or operator
 acknowledgement. There is no automatic retry after uncertain delivery/cancellation.
-Explicit rejections open a temporary five-minute circuit. Duplicate protection is
+Explicit send rejections open a temporary five-minute circuit; validation requests always check the API and do not open that circuit. Duplicate protection is
 per call and named tool, with later caller turns/transfer attempts allowing a new
 update and a 64-event call limit. Identical resolved keys within one tool invocation
 send once even if several rows use them; their diagnostics show deduplication.

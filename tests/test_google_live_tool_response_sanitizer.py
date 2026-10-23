@@ -110,3 +110,16 @@ def test_google_live_tool_response_payload_includes_calendar_events():
     assert payload["events"] == result["events"]
     assert payload["total_events"] == 1
     assert payload["events_truncated"] is False
+
+
+@pytest.mark.parametrize("status", ["success", "error", "timeout"])
+def test_google_notification_response_excludes_diagnostics_and_continues_silently(status):
+    from src.providers.google_live import GoogleLiveProvider
+    from src.config import GoogleProviderConfig
+    provider = GoogleLiveProvider(config=GoogleProviderConfig(), on_event=lambda e: None)
+    result = {"status": status, "internal_notification": True, "message": "private acknowledgement", "delivery_status": "uncertain", "summary_status": "timeout", "notification_deliveries": {"private-recipient": {"delivery_status": "uncertain"}}}
+    payload = provider._build_tool_response_payload("native_notice", result)
+    assert set(payload) == {"status", "instruction"} and payload["status"] == status
+    assert "remaining tools" in payload["instruction"] and "Do not read acknowledgements" in payload["instruction"]
+    assert "private" not in str(payload) and "notification_deliveries" not in payload
+    assert result["notification_deliveries"]["private-recipient"]["delivery_status"] == "uncertain"

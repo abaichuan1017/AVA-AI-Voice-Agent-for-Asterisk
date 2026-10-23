@@ -1616,7 +1616,13 @@ async def patch_managed_tool(name: str, body: ManagedToolPatch):
     merged["phase"] = new_phase
     # Always normalize kind to the canonical value for the (possibly new) phase,
     # rejecting any mismatched client-supplied kind.
-    merged["kind"] = _resolve_kind(new_phase, patch.get("kind") or (cur_doc.get("kind") if cur_doc.get("kind") == "pushover" else None))
+    current_kind = cur_doc.get("kind")
+    requested_kind = patch.get("kind")
+    if current_kind == "pushover" and requested_kind not in (None, "", "pushover"):
+        raise HTTPException(status_code=422, detail="kind cannot be changed for a Pushover tool")
+    merged["kind"] = _resolve_kind(
+        new_phase, requested_kind or ("pushover" if current_kind == "pushover" else None)
+    )
     merged["method"] = str(
         merged.get("method") or ("GET" if new_phase == "pre_call" else "POST")
     ).upper()

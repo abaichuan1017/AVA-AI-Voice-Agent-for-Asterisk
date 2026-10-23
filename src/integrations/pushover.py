@@ -280,7 +280,7 @@ class PushoverSender:
         self, *, token_file, key_file, message=None, timeout_ms=5000, validate=False
     ):
         fingerprint = (token_file, key_file)
-        if (
+        if not validate and (
             self._blocked.get(fingerprint, 0) > time.monotonic()
             or self._blocked.get((token_file, "*"), 0) > time.monotonic()
         ):
@@ -341,19 +341,20 @@ class PushoverSender:
                             or isinstance(data, dict)
                             and data.get("status") == 0
                         ):
-                            if len(self._blocked) >= 512:
-                                self._blocked = {
-                                    key: expiry
-                                    for key, expiry in self._blocked.items()
-                                    if expiry > time.monotonic()
-                                }
-                            if len(self._blocked) < 512:
-                                blocked_key = (
-                                    (token_file, "*")
-                                    if response.status_code == 429
-                                    else fingerprint
-                                )
-                                self._blocked[blocked_key] = time.monotonic() + 300
+                            if not validate:
+                                if len(self._blocked) >= 512:
+                                    self._blocked = {
+                                        key: expiry
+                                        for key, expiry in self._blocked.items()
+                                        if expiry > time.monotonic()
+                                    }
+                                if len(self._blocked) < 512:
+                                    blocked_key = (
+                                        (token_file, "*")
+                                        if response.status_code == 429
+                                        else fingerprint
+                                    )
+                                    self._blocked[blocked_key] = time.monotonic() + 300
                             return {
                                 "delivery_status": "rejected",
                                 "http_status": response.status_code,
