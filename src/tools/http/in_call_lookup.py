@@ -6,6 +6,7 @@ lookup order status) and receive results to inform the conversation.
 """
 
 import os
+import asyncio
 import re
 import json
 import logging
@@ -13,6 +14,7 @@ import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
+from src.tools.summary import SUMMARY_FIELDS, generate_summary, snapshot_history
 from src.tools.http.path_utils import extract_path
 from src.tools.http.template import (
     TemplateError, body_media_type, render_body, render_headers, render_template, render_url,
@@ -44,6 +46,13 @@ class InCallHTTPConfig:
     is_global: bool = False
     timeout_ms: int = 5000
     
+    generate_summary: bool = False
+    summary_provider: Optional[str] = None
+    summary_prompt: Optional[str] = None
+    summary_max_words: int = 100
+    summary_timeout_ms: int = 15000
+    summary_failure_policy: str = "continue"
+
     # Hold audio (played if request exceeds threshold)
     hold_audio_file: Optional[str] = None
     hold_audio_threshold_ms: int = 500
@@ -136,7 +145,7 @@ class InCallHTTPTool(Tool):
             phase=ToolPhase.IN_CALL,
             is_global=config.is_global,
             parameters=tool_params,
-            timeout_ms=config.timeout_ms,
+            timeout_ms=config.timeout_ms + (config.summary_timeout_ms if config.generate_summary else 0),
             hold_audio_file=config.hold_audio_file,
             hold_audio_threshold_ms=config.hold_audio_threshold_ms,
         )
@@ -145,10 +154,42 @@ class InCallHTTPTool(Tool):
     def definition(self) -> ToolDefinition:
         return self._definition
     
-    async def execute(
+    async def execute(self, parameters, context):
+        if not self.config.enabled or not self.config.url:
+            return {"status": "failed" if not self.config.enabled else "error", "message": self.config.error_message}
+        diagnostics = {"internal_notification": True} if self.config.generate_summary else {}
+        async def run():
+            values = await self._build_substitution_context(parameters, context)
+            if self.config.generate_summary:
+                history = await snapshot_history(context)
+                generator = getattr(context.tool_registry, "summary_generator", None)
+                summary_values, summary_diagnostics = await generate_summary(
+                    self.config, generator, call_id=context.call_id,
+                    history=history, values=values,
+                )
+                values.update(summary_values)
+                diagnostics.update(summary_diagnostics)
+                if summary_values["summary_status"] != "ok" and self.config.summary_failure_policy == "abort":
+                    return {"status": "error", "message": "Summary unavailable; request was not sent.",
+                            "delivery_status": "skipped"}
+                # A completed summary must not start delivery after hangup/cleanup.
+                live = await context.get_session()
+                if getattr(live, "cleanup_in_progress", False) or getattr(live, "cleanup_completed", False):
+                    return {"status": "cancelled", "delivery_status": "skipped"}
+            return await self._execute_request(parameters, context, values)
+        try:
+            result = await asyncio.wait_for(run(), timeout=self.definition.timeout_ms / 1000)
+        except asyncio.TimeoutError:
+            result = {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain"}
+        except Exception:
+            result = {"status": "error", "message": self.config.error_message, "delivery_status": "skipped"}
+        return {**result, **diagnostics}
+
+    async def _execute_request(
         self,
         parameters: Dict[str, Any],
-        context: ToolExecutionContext
+        context: ToolExecutionContext,
+        sub_context: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Execute the HTTP lookup and return results to AI.
@@ -180,7 +221,6 @@ class InCallHTTPTool(Tool):
         try:
             started = time.monotonic()
             # Build substitution context (context vars + pre-call results + AI params)
-            sub_context = await self._build_substitution_context(parameters, context)
             
             # Build request
             url = render_url(self.config.url, sub_context)
@@ -426,6 +466,8 @@ class InCallHTTPTool(Tool):
                     
                     return result
         
+        except asyncio.TimeoutError:
+            return {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain"}
         except aiohttp.ClientError as e:
             logger.warning(f"In-call HTTP tool request failed: {self.config.name} error={e}")
             return {
@@ -442,7 +484,7 @@ class InCallHTTPTool(Tool):
     async def _build_substitution_context(
         self,
         ai_params: Dict[str, Any],
-        context: ToolExecutionContext
+        context: ToolExecutionContext,
     ) -> Dict[str, Any]:
         """
         Build combined substitution context from call context, pre-call results, and AI parameters.
@@ -463,6 +505,9 @@ class InCallHTTPTool(Tool):
             "caller_name": context.caller_name or "",
             "context_name": context.context_name or "",
             "call_id": context.call_id or "",
+            **{key: "" for key in SUMMARY_FIELDS},
+            "summary_json": json.dumps(""),
+            "summary_status": "disabled",
         }
         
         # Add pre-call tool results (fetched before call started)
@@ -486,7 +531,7 @@ class InCallHTTPTool(Tool):
                     call_metadata = getattr(session, 'call_metadata', None) or {}
                     built_in_keys = {
                         "caller_number", "called_number", "caller_name",
-                        "context_name", "call_id",
+                        "context_name", "call_id", *SUMMARY_FIELDS,
                     }
                     for key, value in call_metadata.items():
                         if key not in built_in_keys:
@@ -594,6 +639,12 @@ def create_in_call_http_tool(name: str, config_dict: Dict[str, Any]) -> InCallHT
         enabled=config_dict.get('enabled', True),
         is_global=config_dict.get('is_global', False),
         timeout_ms=config_dict.get('timeout_ms', 5000),
+        generate_summary=config_dict.get('generate_summary', False),
+        summary_provider=config_dict.get('summary_provider'),
+        summary_prompt=config_dict.get('summary_prompt'),
+        summary_max_words=config_dict.get('summary_max_words', 100),
+        summary_timeout_ms=config_dict.get('summary_timeout_ms', 15000),
+        summary_failure_policy=config_dict.get('summary_failure_policy', 'continue'),
         hold_audio_file=config_dict.get('hold_audio_file'),
         hold_audio_threshold_ms=config_dict.get('hold_audio_threshold_ms', 500),
         url=config_dict.get('url', ''),

@@ -65,6 +65,7 @@ class ToolRegistry:
     def clone(self) -> "ToolRegistry":
         """Create a call-local shallow clone; tool instances are configuration-immutable."""
         cloned = self.isolated()
+        cloned.summary_generator = getattr(self, "summary_generator", None)
         cloned._tools = dict(self._tools)
         cloned._initialized = self._initialized
         cloned._in_call_http_init_cache = set(self._in_call_http_init_cache)

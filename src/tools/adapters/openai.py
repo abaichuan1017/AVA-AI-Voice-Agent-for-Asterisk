@@ -320,7 +320,14 @@ class OpenAIToolAdapter:
             
             # If tool has a message and AI should speak, add direct instruction to speak it
             # Instructions work in both GA and Beta modes
-            if function_name == "microsoft_calendar":
+            if safe_result.get("internal_notification"):
+                response_config["instructions"] = (
+                    "Continue the conversation and any remaining tools using the business instructions. "
+                    "Treat the latest tool result as internal notification data. Do not read acknowledgements, "
+                    "delivery diagnostics or technical errors aloud. Never claim a write succeeded without "
+                    "a successful result. Continue the caller's request naturally."
+                )
+            elif function_name == "microsoft_calendar":
                 # Calendar results describe state and recoverable errors, not a script
                 # to read aloud. Keep data in function_call_output, out of instructions.
                 response_config["instructions"] = (

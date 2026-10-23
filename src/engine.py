@@ -17785,7 +17785,8 @@ class Engine:
                             ari_client=self.ari_client,
                             config=self._tool_config_for_session(session),
                             tool_registry=tool_registry,
-                            provider_name="pipeline"
+                            provider_name="pipeline",
+                            user_input=transcript_text,
                         )
 
                         for tool_call in tool_calls:
@@ -19508,6 +19509,7 @@ class Engine:
                 inline_http,
                 cache_key=f"agent:{session.context_name or session.call_id}",
             )
+        registry.summary_generator = self._post_call_summary_generator()
         session.tool_runtime_registry = registry
         session.tool_runtime_config = effective.config
         session.tool_generation_id = generation.generation_id
@@ -19585,6 +19587,7 @@ class Engine:
             # An Agent assignment alone is insufficient when this call has no
             # selected correctable pre-call fields.
             registry.unregister("update_call_metadata")
+        registry.summary_generator = self._post_call_summary_generator()
         session.tool_runtime_registry = registry
         await self._save_session(session)
         return session
@@ -20875,6 +20878,7 @@ class Engine:
                 try:
                     registry = self._tool_registry_for_session(session).clone()
                     registry.unregister("update_call_metadata")
+                    registry.summary_generator = self._post_call_summary_generator()
                     session.tool_runtime_registry = registry
                     await self._save_session(session)
                 except Exception:
