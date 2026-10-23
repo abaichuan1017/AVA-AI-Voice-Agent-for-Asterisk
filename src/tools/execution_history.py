@@ -422,7 +422,8 @@ def build_in_call_tool_record(
 
     return {
         **{key: result_dict[key] for key in ("summary_provider", "summary_model", "summary_status",
-            "summary_duration_ms", "summary_error_code", "delivery_status", "notification_deliveries") if key in result_dict},
+            "summary_duration_ms", "summary_error_code") if key in result_dict},
+        **({key: result_dict[key] for key in ("delivery_status", "notification_deliveries", "notification_service") if key in result_dict} if result_dict.get("internal_notification") else {}),
         "type": "tool_result",
         "call_id": str(call_id or ""),
         "tool_call_id": stable_tool_call_id(tool_call_id),

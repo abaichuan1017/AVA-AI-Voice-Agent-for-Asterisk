@@ -19,6 +19,8 @@ import {
 import { useAuth } from '../../auth/AuthContext';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { ToolEditorSurface } from './ToolEditorSurface';
+import { PushoverToolFields } from './PushoverToolFields';
+import { pushoverDocument } from './pushoverToolConfig';
 
 const BODY_CAPABLE_HTTP_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const isBodyCapableHTTPMethod = (method?: string) =>
@@ -43,6 +45,7 @@ interface ToolParameter {
 
 interface HTTPToolConfig {
     kind: string;
+    recipient_label?: string;
     phase: string;
     enabled: boolean;
     is_global: boolean;
@@ -141,6 +144,8 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
     const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
     const [toolForm, setToolForm] = useState<any>({});
+    const [pushoverCredentials, setPushoverCredentials] = useState({token: '', recipient: ''});
+    const [savingPushover, setSavingPushover] = useState(false);
     const [headerKey, setHeaderKey] = useState('');
     const [headerValue, setHeaderValue] = useState('');
     const [outputVarKey, setOutputVarKey] = useState('');
@@ -227,6 +232,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
     };
 
     const closeEditor = () => {
+        setPushoverCredentials({token: "", recipient: ""});
         setEditingTool(null);
         resetDraftRows();
         setTestResult(null);
@@ -257,6 +263,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
     const httpTools = getHTTPTools();
 
     const handleAddTool = () => {
+        setPushoverCredentials({token: "", recipient: ""});
         resetDraftRows();
         setTestResult(null);
         setShowTestPanel(false);
@@ -302,10 +309,11 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
         setShowTestPanel(false);
         setShowAllMappings(false);
         setEditingTool(key);
+        setPushoverCredentials({token: "", recipient: ""});
         setToolForm({ key, ...data });
     };
 
-    const handleSaveTool = () => {
+    const handleSaveTool = async () => {
         let committedToolForm = withDraftRowsCommitted(toolForm);
         if (!isBodyCapableHTTPMethod(committedToolForm.method)) {
             committedToolForm = {
@@ -319,7 +327,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
             toast.error('Please enter a Tool Name');
             return;
         }
-        if (!committedToolForm.url) {
+        if (committedToolForm.kind !== "pushover" && !committedToolForm.url) {
             toast.error('Please enter a URL');
             return;
         }
@@ -369,6 +377,29 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
             }
         }
 
+        if (committedToolForm.kind === 'pushover') {
+            if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(committedToolForm.key) || (editingTool === 'new_tool' && config[committedToolForm.key])) {
+                toast.error('Choose a unique tool name using letters, numbers and underscores');
+                return;
+            }
+            const credentials = Object.fromEntries(Object.entries(pushoverCredentials).filter(([, value]) => Boolean(value)));
+            if (Object.values(credentials).some(value => !/^[A-Za-z0-9]{30}$/.test(value))) {
+                toast.error('Pushover credentials require 30 alphanumeric characters');
+                return;
+            }
+            setSavingPushover(true);
+            try {
+                if (Object.keys(credentials).length) {
+                    const response = await axios.post('/api/pushover/credentials', credentials);
+                    committedToolForm = {...committedToolForm, ...response.data};
+                    setPushoverCredentials({token: '', recipient: ''});
+                }
+            } catch {
+                toast.error('Unable to store credentials. Tool changes have not been staged.');
+                return;
+            } finally { setSavingPushover(false); }
+            committedToolForm = {key: committedToolForm.key, ...pushoverDocument(committedToolForm)};
+        }
         const { key, ...data } = committedToolForm;
         const updated = { ...config };
 
@@ -618,27 +649,27 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
             case 'pre_call':
                 return {
                     icon: <Search className="w-4 h-4" />,
-                    title: 'Pre-Call HTTP Lookups',
-                    desc: 'Fetch data from external APIs (CRM, database) before the AI speaks. Output variables are injected into the system prompt.',
-                    addLabel: 'Add Lookup',
-                    emptyLabel: 'pre-call lookups',
+                    title: 'Pre-Call Tools',
+                    desc: 'Run selected HTTP enrichment and Pushover notifications before the AI speaks. Notifications consume completed enrichment.',
+                    addLabel: 'Add Tool',
+                    emptyLabel: 'pre-call tools',
                 };
             case 'in_call':
                 return {
                     icon: <Search className="w-4 h-4" />,
-                    title: 'In-Call HTTP Tools',
-                    desc: 'HTTP lookup tools the AI can invoke during conversation to fetch data (e.g., check availability, lookup order status).',
+                    title: 'In-Call Tools',
+                    desc: 'Configure HTTP and Pushover tools the AI can invoke during conversation. Agent access is managed in Agents.',
                     addLabel: 'Add Tool',
-                    emptyLabel: 'in-call HTTP tools',
+                    emptyLabel: 'in-call tools',
                 };
             case 'post_call':
             default:
                 return {
                     icon: <Webhook className="w-4 h-4" />,
-                    title: 'Post-Call Webhooks',
-                    desc: 'Send call data to external systems (n8n, Make, CRM) after the call ends. Fire-and-forget.',
-                    addLabel: 'Add Webhook',
-                    emptyLabel: 'post-call webhooks',
+                    title: 'Post-Call Tools',
+                    desc: 'Run selected HTTP webhooks and Pushover notifications after the call ends, through the existing post-call lifecycle.',
+                    addLabel: 'Add Tool',
+                    emptyLabel: 'post-call tools',
                 };
         }
     };
@@ -694,12 +725,12 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                                         )}
                                     </div>
                                     <div className="text-xs text-muted-foreground">
-                                        {tool.method} •{' '}
+                                        {tool.kind === 'pushover' ? `Pushover • ${tool.recipient_label || 'Recipient'}` : <>{tool.method} •{' '}
                                         {tool.url
                                             ? tool.url.length > 50
                                                 ? tool.url.substring(0, 50) + '...'
                                                 : tool.url
-                                            : 'No URL'}
+                                            : 'No URL'}</>}
                                     </div>
                                 </div>
                             </div>
@@ -735,7 +766,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                 allowFullscreen
                 title={
                     editingTool === 'new_tool'
-                        ? `Add ${phase === 'pre_call' ? 'HTTP Lookup' : phase === 'in_call' ? 'In-Call HTTP Tool' : 'Webhook'}`
+                        ? toolForm.kind === 'pushover' ? 'Add Pushover Tool' : `Add ${phase === 'pre_call' ? 'HTTP Lookup' : phase === 'in_call' ? 'In-Call HTTP Tool' : 'Webhook'}`
                         : `Edit ${toolForm.key}`
                 }
                 footer={
@@ -746,9 +777,9 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                         >
                             Cancel
                         </button>
-                        <button
+                        {toolForm.kind !== 'pushover' && <button
                             onClick={handleTestTool}
-                            disabled={testing || !toolForm.url}
+                            disabled={testing || !toolForm.url || toolForm.kind === 'pushover'}
                             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
                         >
                             {testing ? (
@@ -757,9 +788,10 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                                 <Play className="w-4 h-4" />
                             )}
                             {testing ? 'Testing...' : 'Test'}
-                        </button>
+                        </button>}
                         <button
-                            onClick={handleSaveTool}
+                            disabled={savingPushover}
+                            onClick={() => void handleSaveTool()}
                             className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
                         >
                             {presentation === 'page' ? 'Update tool' : 'Save'}
@@ -768,6 +800,11 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                 }
             >
                 <div className="space-y-4">
+                    <FormSelect label="Tool type" value={toolForm.kind === 'pushover' ? 'pushover' : 'http'} disabled={editingTool !== 'new_tool'} options={[{value: 'http', label: 'HTTP'}, {value: 'pushover', label: 'Pushover'}]} onChange={e => {
+                        const kind = e.target.value === 'pushover' ? 'pushover' : ({pre_call: 'generic_http_lookup', in_call: 'in_call_http_lookup', post_call: 'generic_webhook'}[phase]);
+                        setToolForm({...toolForm, kind, priority: 0, summary_prompt: recommendedSummaryPrompt, summary_failure_policy: 'continue'});
+                        setPushoverCredentials({token: '', recipient: ''});
+                    }} />
                     <FormInput
                         label="Tool Name"
                         value={toolForm.key || ''}
@@ -796,6 +833,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                         />
                     </div>
 
+                    {toolForm.kind === 'pushover' ? <PushoverToolFields value={toolForm} onChange={setToolForm} credentials={pushoverCredentials} onCredentialsChange={setPushoverCredentials} /> : <>
                     <FormInput
                         label="URL"
                         value={toolForm.url || ''}
@@ -1752,13 +1790,14 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                         </>
                     )}
 
-                    {/* Post-call specific: Payload Template + Summary */}
+                    </>}
+                    {/* Shared summary controls */}
                     {phase !== 'pre_call' && (
                         <>
                             <div className="border border-border rounded-lg p-3 bg-card/30">
                                 <FormSwitch
                                     label="Generate AI Summary"
-                                    description="Generate {summary} and JSON-safe {summary_json} internally before delivery. Uses only the selected provider; generation and HTTP delivery have separate timeout budgets."
+                                    description="Generate {summary} and JSON-safe {summary_json} internally before delivery. Uses only the selected provider; generation and delivery have separate timeout budgets."
                                     checked={toolForm.generate_summary ?? false}
                                     onChange={e =>
                                         setToolForm({
@@ -1769,7 +1808,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                                 />
                                 {toolForm.generate_summary && (
                                     <div className="mt-4 space-y-3">
-                                        {phase === 'in_call' && <FormSelect
+                                        {(phase === 'in_call' || toolForm.kind === 'pushover') && <FormSelect
                                             label="If summary generation fails"
                                             value={toolForm.summary_failure_policy || 'continue'}
                                             options={[{value: 'continue', label: 'Deliver details with summary unavailable'}, {value: 'abort', label: 'Do not send the request'}]}
@@ -1935,7 +1974,7 @@ const HTTPToolForm = ({ config, onChange, phase, contexts, presentation = 'modal
                                     </div>
                                 )}
                             </div>
-                            {phase === 'post_call' && isBodyCapableHTTPMethod(toolForm.method) && (
+                            {toolForm.kind !== 'pushover' && phase === 'post_call' && isBodyCapableHTTPMethod(toolForm.method) && (
                                 <div className="space-y-2">
                                     <FormLabel tooltip="JSON payload with variable substitution. Available: {call_id}, {caller_number}, {call_duration}, {transcript_json}, {summary}, etc.">
                                         Payload Template

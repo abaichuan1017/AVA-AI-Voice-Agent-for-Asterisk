@@ -20,7 +20,6 @@ import ipaddress
 import re
 import structlog
 
-from src.integrations.pushover import PushoverConfig
 from src.utils.diagnostic_paths import DEFAULT_DIAGNOSTIC_TAP_DIR
 from src.media_transport_capabilities import supports_media_websocket, resolve_media_websocket_control
 from src.fish_audio_url import validate_fish_audio_base_url, validate_fish_audio_ws_url
@@ -1357,7 +1356,9 @@ class AppConfig(BaseModel):
     # P1: profiles/contexts for transport orchestration
     profiles: Dict[str, Any] = Field(default_factory=dict)
     contexts: Dict[str, Any] = Field(default_factory=dict)
-    pushover: PushoverConfig = Field(default_factory=PushoverConfig)
+    # Preserve settings from the unreleased integration-panel prototype for rollback.
+    # Named tools are the only executable Pushover configuration.
+    pushover: Dict[str, Any] = Field(default_factory=dict)
     # Tool calling configuration (v4.1)
     tools: Dict[str, Any] = Field(default_factory=dict)
     # In-call HTTP tool definitions (Milestone 24)

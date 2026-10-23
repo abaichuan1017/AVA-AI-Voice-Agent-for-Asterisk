@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -491,21 +492,24 @@ class ToolRuntimeGeneration:
         snapshot = copy.deepcopy(dict(config or {}))
         from src.tools.handoff_config import validate_handoff_config
         validate_handoff_config(snapshot.get("tools") or {})
-        from src.integrations.pushover import PushoverConfig
-        snapshot["pushover"] = PushoverConfig.model_validate(snapshot.get("pushover") or {}).model_dump()
+        from src.integrations.pushover import PushoverToolConfig
         registry = ToolRegistry.isolated()
         registry.initialize_default_tools()
+        for block in ("tools", "in_call_tools"):
+            for name, doc in (snapshot.get(block) or {}).items():
+                if isinstance(doc, dict) and doc.get("kind") == "pushover":
+                    try:
+                        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", str(name)) or registry.has(name) or str(name).startswith("mcp_"):
+                            raise ValueError()
+                        parsed = PushoverToolConfig.model_validate(doc)
+                        if (parsed.phase == "in_call") != (block == "in_call_tools"):
+                            raise ValueError()
+                    except Exception:
+                        raise ToolConfigPolicyError("Invalid managed Pushover tool configuration") from None
         registry.initialize_http_tools_from_config(snapshot.get("tools") or {})
         registry.initialize_in_call_http_tools_from_config(
             snapshot.get("in_call_tools") or {}, cache_key="global"
         )
-        pushover = PushoverConfig.model_validate(snapshot["pushover"])
-        if pushover.enabled:
-            native_names = {"pre_call": "pushover_arrival", "in_call": "pushover_briefing", "post_call": "pushover_completion"}
-            for phase, name in native_names.items():
-                selected = any(agent.enabled and getattr(agent, phase) for agent in pushover.agents.values())
-                if selected and registry.has(name):
-                    raise ToolConfigPolicyError(f"Rename the existing managed tool {name} before enabling native Pushover")
         for tool in preserved_tools or ():
             name = getattr(getattr(tool, "definition", None), "name", None)
             if name and not registry.has(name):

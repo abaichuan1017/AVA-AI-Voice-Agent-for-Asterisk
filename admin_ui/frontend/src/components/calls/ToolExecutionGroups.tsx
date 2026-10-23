@@ -11,6 +11,7 @@ interface ToolDiagnostics {
     summary_duration_ms?: number | null;
     summary_error_code?: string | null;
     delivery_status?: string | null;
+    notification_service?: string | null;
     notification_deliveries?: Record<string, {delivery_status: string; error_code?: string}> | null;
 }
 
@@ -28,7 +29,7 @@ const ToolDiagnosticsView = ({entry}: {entry: ToolDiagnostics}) => <>
     {entry.delivery_status && <div className="mt-2 rounded bg-background/50 p-2 text-xs">
         <span className="font-medium">Delivery: {entry.delivery_status}</span>
         {Object.entries(entry.notification_deliveries || {}).map(([key,result])=><div key={key}>{key}: {result.delivery_status}{result.error_code && ` (${result.error_code})`}</div>)}
-        <p className="text-muted-foreground mt-1">Accepted means queued by the service, not displayed or read.</p>
+        {entry.notification_service === "pushover" && <p className="text-muted-foreground mt-1">Accepted means queued by Pushover, not displayed or read.</p>}
     </div>}
 </>;
 

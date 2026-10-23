@@ -26,6 +26,11 @@ PHASES = ("pre_call", "in_call", "post_call")
 VARIABLES = frozenset(
     {
         "agent",
+        "caller_name",
+        "context_name",
+        "called_number",
+        "call_outcome",
+        "call_duration",
         "stage",
         "call_id",
         "caller_number",
@@ -40,12 +45,11 @@ VARIABLES = frozenset(
         "meeting",
         "summary",
         "summary_status",
-        "update_key",
     }
 )
 DEFAULT_TITLES = {
     "pre_call": "{agent}: incoming call",
-    "in_call": "{agent}: handoff requested",
+    "in_call": "{agent}: call update",
     "post_call": "{agent}: call complete",
 }
 DEFAULT_BODIES = {
@@ -56,12 +60,6 @@ DEFAULT_BODIES = {
 
 class StrictConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class Recipient(StrictConfig):
-    label: str = Field(default="", max_length=100)
-    enabled: bool = True
-    key_file: str = ""
 
 
 class PhaseSettings(StrictConfig):
@@ -92,59 +90,39 @@ class PhaseSettings(StrictConfig):
         return self
 
 
-class AgentSettings(StrictConfig):
-    enabled: bool = False
-    pre_call: list[str] = Field(default_factory=list, max_length=16)
-    in_call: list[str] = Field(default_factory=list, max_length=16)
-    post_call: list[str] = Field(default_factory=list, max_length=16)
-    destination_key: str = Field(default="", max_length=64)
-    update_keys: list[str] = Field(
-        default_factory=lambda: ["handoff"], min_length=1, max_length=8
+class PushoverToolConfig(PhaseSettings):
+    kind: Literal["pushover"] = "pushover"
+    phase: Literal["pre_call", "in_call", "post_call"]
+    enabled: bool = True
+    is_global: bool = False
+    description: str = Field(
+        default="Send the configured internal Pushover notification.", max_length=8000
     )
-
-    @field_validator("update_keys")
-    @classmethod
-    def valid_updates(cls, value):
-        if any(not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key) for key in value):
-            raise ValueError("Update keys require lowercase identifiers")
-        return list(dict.fromkeys(value))
-
-
-class PushoverConfig(StrictConfig):
-    enabled: bool = False
     token_file: str = ""
-    recipients: dict[str, Recipient] = Field(default_factory=dict, max_length=64)
-    agents: dict[str, AgentSettings] = Field(default_factory=dict, max_length=256)
-    phases: dict[str, PhaseSettings] = Field(
-        default_factory=lambda: {phase: PhaseSettings() for phase in PHASES}
-    )
+    key_file: str = ""
+    recipient_label: str = Field(default="", max_length=100)
     priority: Literal[-2, -1, 0, 1] = 0
     sound: str = Field(default="", max_length=64)
     timeout_ms: int = Field(default=5000, ge=100, le=10000)
-    suppress_transferred_completion: bool = True
+    destination_key: str = Field(default="", max_length=64)
+    suppress_after_tool: str = Field(default="", max_length=64)
 
     @model_validator(mode="after")
-    def validate_document(self):
-        if set(self.phases) - set(PHASES):
-            raise ValueError("Unsupported notification phase")
-        if any(
-            not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", key) for key in self.recipients
-        ):
-            raise ValueError("Recipient keys require lowercase identifiers")
-        if any(not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", key) for key in self.agents):
-            raise ValueError("Invalid agent slug")
+    def validate_tool(self):
+        if self.phase == "pre_call" and self.generate_summary:
+            raise ValueError("Pre-call notifications do not generate summaries")
         if not re.fullmatch(r"[A-Za-z0-9_-]{0,64}", self.sound):
             raise ValueError("Invalid sound identifier")
-        for phase in PHASES:
-            self.phases.setdefault(phase, PhaseSettings())
-        # Stale assignments intentionally remain representable; execution fails closed.
-        if self.phases.get("pre_call", PhaseSettings()).generate_summary:
-            raise ValueError("Arrival notifications do not generate summaries")
+        if self.suppress_after_tool and (
+            self.phase != "post_call"
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", self.suppress_after_tool)
+        ):
+            raise ValueError("Select an in-call tool name for post-call suppression")
         return self
 
 
 def render_message(config, phase, values):
-    settings = config.phases.get(phase, PhaseSettings())
+    settings = config
 
     def render(template, data):
         parts = []

@@ -75,7 +75,7 @@ describe('HTTPToolForm editor colors', () => {
 
     it('styles pre-call header, query, output, and body controls for dark mode', () => {
         renderForm('pre_call');
-        fireEvent.click(screen.getByRole('button', { name: 'Add Lookup' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
 
         expectThemeAwareControl(screen.getByPlaceholderText('Header name'));
         expectThemeAwareControl(screen.getByPlaceholderText('Value (use ${VAR} for secrets)'));
@@ -92,7 +92,7 @@ describe('HTTPToolForm editor colors', () => {
 
     it('starts GET lookups without a JSON header and clears a hidden body on method change', () => {
         renderForm('pre_call');
-        fireEvent.click(screen.getByRole('button', { name: 'Add Lookup' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
 
         expect(screen.queryByText(/Content-Type: application\/json/)).not.toBeInTheDocument();
         fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'POST' } });
@@ -111,7 +111,7 @@ describe('HTTPToolForm editor colors', () => {
 
     it('preserves a configured body when switching from POST to DELETE', () => {
         renderForm('pre_call');
-        fireEvent.click(screen.getByRole('button', { name: 'Add Lookup' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
         fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'POST' } });
         const body = screen.getByPlaceholderText(
             '{"phone": "{caller_number}", "context": "{context_name}"}'
@@ -150,7 +150,7 @@ describe('HTTPToolForm editor colors', () => {
 
     it('styles shared headers and the post-call payload control', () => {
         renderForm('post_call');
-        fireEvent.click(screen.getByRole('button', { name: 'Add Webhook' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
 
         expectThemeAwareControl(screen.getByPlaceholderText('Header name'));
         expectThemeAwareControl(screen.getByPlaceholderText('Value (use ${VAR} for secrets)'));
@@ -179,7 +179,7 @@ describe('HTTPToolForm editor colors', () => {
             },
         });
         renderForm('post_call');
-        fireEvent.click(screen.getByRole('button', { name: 'Add Webhook' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
         fireEvent.click(screen.getByLabelText('Generate AI Summary'));
 
         await waitFor(() =>

@@ -1,115 +1,122 @@
-# Native Pushover notifications
+# Pushover tools
 
-Native Pushover is an opt-in integration in **Tools → Pushover**. It does not
-require a connector container or CRM. Existing HTTP tools and post-call timing
-remain unchanged. The three native adapter names are reserved; rename a
-conflicting managed tool before enabling that phase. Other existing Pushover
-HTTP tool names remain valid. Summary generation is shared with [in-call HTTP summaries](In-Call-Summaries.md).
+Pushover is a native tool type in the existing **Tools → Pre-Call / In-Call /
+Post-Call** workflow. Create as many named tools as needed, each with its own
+recipient, templates, summary settings and description. No separate integration
+panel, automatic agent assignments or connector container is required.
 
-## Configure through the Admin UI
+## Configure a tool
 
-1. Register a Pushover application and have a licensed Pushover user or group with
-   an active device. Enter its application token. Saved tokens and recipient keys
-   are masked; blank credential fields preserve the saved values.
-2. Add named recipients, enter each user/group key, and save. **Validate** checks a
-   key without sending a notification. **Send test** sends one fixed test message
-   only when explicitly clicked. Settings saves and previews never send.
-3. Choose the sound (blank respects the user's default), priority and delivery
-   timeout. Emergency priority, receipts, attachments and supplementary URLs are
-   not supported.
-4. Enable notifications for selected agents and assign recipients separately for
-   Arrival, Briefing and Completion. New agents are disabled by default. Deleted
-   or disabled recipients fail closed; stale assignments never select a fallback.
-5. Set each phase's title/body templates, using the preview to check synthetic
-   content. Optional summary controls are available for briefing and completion:
-   explicit LLM provider, prompt (`{max_words}`), word limit, timeout and failure
-   policy. Missing credentials never switch to another summary provider.
-6. When migrating an existing connector, disable only its equivalent Pushover sends
-   for the pilot agent and retain its CRM/email functions to prevent dual sends.
-7. Save, then **Apply settings**. This publishes the normal new-call generation;
-   active calls retain their captured scope, settings and credential references.
+1. Choose a phase, click **Add Tool**, and select **Pushover** as the tool type.
+2. Enter a tool name, for example `notify_sales` or `send_call_recap`. Enable the
+   tool and choose whether it is global using the normal controls. Global tools
+   apply to all agents except existing opt-outs; otherwise select the tool in
+   **Agents**, in that phase's existing tool selector.
+3. Give the recipient a display name. Enter a Pushover application token and a
+   user/group key. Both are password fields. Blank fields keep saved credentials;
+   explicit clear controls remove the current references. Keys are never supplied
+   by the AI or included in the tool's model parameters.
+4. Set the notification title and plain-text message template. **Preview message**
+   uses synthetic data and makes no network/model request. **Validate recipient**
+   checks credentials without sending a message. **Send test notification** sends
+   a fixed synthetic message only when explicitly clicked.
+5. For in-call and post-call tools, optionally enable **Generate AI Summary** and
+   choose the configured provider, summary prompt, word limit, timeout and failure
+   policy. The same tool generates the summary internally before delivery; there
+   is no separate summary-tool invocation or copying step. Explicit provider
+   selection never falls back to another endpoint. Pre-call tools have no summary.
+6. Click **Update tool**, then the Tools page's normal **Save & Apply**. This stages,
+   saves and publishes the same captured generation as HTTP tools. Preview,
+   credential staging and tests do not enable or save a tool. Active calls retain
+   their captured settings and immutable credential references.
 
-Arrival runs after the agent's selected pre-call enrichment completes, before
-provider startup. Enrichment failure leaves unknown values; arrival failure never
-prevents the call. Delivery is bounded by the configured timeout (default 5s),
-which is additional potential greeting latency. Use a shorter timeout if needed.
+The **tool description / when to use** field is guidance offered to the in-call
+AI. Agent instructions can add rules, for example:
 
-Briefing exposes `pushover_briefing` with an operator-configured `update_key`
-allowlist (default `handoff`). Instruct the agent to invoke it **before transfer**.
-The operation generates its summary internally, in one tool call. A briefing says
-handoff requested; it cannot establish that a transfer succeeded or was answered.
-Internal acknowledgements are silent tool data; conversation/tool continuation is
-preserved. Completion runs through existing post-call cleanup and describes only
-the AVA conversation and trusted outcome, never unobserved human conversation.
+> Before transferring to Sales, call `notify_sales`, then proceed with transfer.
 
-## Message fields and identity
+The **summary prompt** controls the generated recap, for example:
 
-Templates support `{agent}`, `{stage}`, `{name}`, `{identity_source}`, `{company}`,
-`{crm_status}`, `{caller_number}`, `{callback_number}`, `{destination}`, `{call_id}`,
-`{outcome}`, `{language}`, `{meeting}`, `{summary}`, `{summary_status}` and
-`{update_key}`. Missing data is unknown. Values are inserted once as plain text;
-model/caller data cannot select credentials, recipients, endpoints or policies.
-The default message preserves essential fields and shortens the recap to fit.
+> Summarize the caller's request, troubleshooting and reason for escalation in
+> at most {max_words} words. State observed facts only.
 
-Name precedence is caller-confirmed correction, CRM identity, usable caller-ID
-name, then unknown. Configure existing metadata collection to retain
-`customer_name` and `customer_name_source=caller_confirmed` when applicable.
-Company may come from `company`, `company_name` or `customer_company`; CRM status
-comes from enrichment `crm_status`/`match_status`. A distinct `callback_number`,
-`language` can be consumed when already captured. Meeting times require a successful
-current-call calendar creation/update in tool history; cancellation removes them.
-Metadata or conversational claims alone never establish a booking. Pushover
-performs no CRM queries, meeting extraction or CRM writes. A confirmed name
-improves presentation without changing identity/routing/consent authority.
+These are separate controls. A description does not schedule pre/post-call tools;
+phase selection governs those automatic lifecycle hooks. A prompt cannot guarantee
+execution after a transfer. Invoke the notification before transfer when needed.
+A booking update or general callback notification can use a different named tool,
+description and template; in-call tools are not tied to transfers.
 
-Choose an intended transfer destination for an agent if completion suppression is
-wanted. Suppression requires an actual transferred outcome, an accepted briefing
-to that recipient, a matching configured destination, and the corresponding next
-transfer attempt. Unknown/mismatched destinations, failed/cancelled transfer or
-uncertain/rejected briefing retain completion. Conservative matching can send a
-completion if the PBX exposes a different destination description; this avoids
-silently suppressing a necessary notification.
+## Phase behavior
 
-## Delivery and privacy
+- **Pre-call:** selected notifications run after selected enrichment finishes,
+  before provider startup. Failure never prevents answering. Delivery adds at most
+  its configured timeout to this stage, so use a short budget where appropriate.
+- **In-call:** the AI invokes the named tool according to its description and Agent
+  prompt. It has no recipient, credential or URL arguments. Internal acknowledgements
+  stay silent while the conversation and subsequent tools continue normally.
+- **Post-call:** selected tools run through AVA's existing post-call lifecycle.
+  They can summarize the finalized AVA conversation and observed outcome. Existing
+  post-call timing is unchanged; unobserved human conversations are unavailable.
 
-The sender uses only Pushover's fixed HTTPS API, validates TLS, disables redirects,
-bounds responses and waiters, and limits connections to two across engine/Admin
-processes through leases in their shared `/app/data/pushover/locks` directory.
-Both containers must share the data mount and a compatible runtime UID, as in the
-standard Compose deployment. A lease/credential permission failure fails delivery
-without affecting call ownership. No generic HTTP request-body tracing is used.
+When migrating another connector, disable only its equivalent notification sends
+for the pilot agent and preserve its CRM/email functions to avoid duplicate sends.
+The unreleased integration-panel prototype's top-level `pushover` document is
+retained for rollback but does not execute or create tool assignments. Configure
+named tools through this workflow; no prototype recipient/policy is auto-enabled.
 
-Diagnostics distinguish accepted, rejected, uncertain, capacity/timeout and
-skipped/suppressed outcomes, separately from summary provider/model/status/timing.
-Accepted means queued by Pushover, not displayed/read/acknowledged. There is no
-automatic retry after an ambiguous response, timeout or cancellation. Explicit
-API rejections temporarily open a five-minute circuit for that recipient (or all
-recipients for a quota rejection), preventing repeated invalid requests. Credential
-replacement creates a new reference and permits validation of the corrected key.
+## Templates and trusted data
 
-Repeated invocations for the same call, update key, latest caller request and
-transfer attempt are deduplicated. A later caller request or transfer attempt can
-produce a new briefing. There is a 64-event limit per call. Protection is
-in-memory and best-effort: there is no durable outbox, restart replay or
-exactly-once promise. A process restart loses duplicate state.
+Templates support `{agent}`, `{context_name}`, `{stage}`, `{name}`, `{caller_name}`,
+`{identity_source}`, `{company}`, `{crm_status}`, `{caller_number}`, `{callback_number}`,
+`{called_number}`, `{destination}`, `{call_id}`, `{outcome}`, `{call_outcome}`,
+`{call_duration}`, `{language}`, `{meeting}`, `{summary}` and `{summary_status}`.
+Values are inserted once as plain text; missing data is unknown. Titles are bounded
+at 250 characters and messages at 1,024 Unicode characters. The default template
+preserves structured details and shortens the recap to fit.
 
-Credentials use existing owner-only managed secret files. Replacement creates a
-new immutable reference, preserving in-flight call scope. Removing a recipient or
-application credential clears its current configuration reference; old files are
-retained for captured calls and rollback. Retired files may be removed manually
-only after no retained call/configuration references them. Do not copy secret
-files into support exports or public PRs.
+Name precedence is caller-confirmed correction, CRM identity, usable caller-ID name,
+then unknown. Existing metadata collection may retain `customer_name` and
+`customer_name_source=caller_confirmed`. Company/CRM status and callback/language
+are consumed only when already captured. Meeting details require successful
+current-call calendar writes; metadata or conversational claims alone do not
+establish a booking. Pushover performs no CRM queries or identity/routing changes.
 
-## API contract and verification
+For handoffs, write **handoff requested** in the template rather than claiming a
+transfer was answered or successful. Optional **Advanced** controls allow an in-call
+tool to identify an intended transfer destination key, and a post-call tool to
+reference that tool by name for completion suppression. Suppression requires an
+accepted send with the same effective credentials and an actual matching next
+transfer outcome. Failed/cancelled transfers, changed credentials, unknown/mismatched
+destinations and rejected/uncertain sends retain completion. Leaving the reference
+blank always retains the normal post-call notification.
+
+## Delivery, credentials and diagnostics
+
+The shared sender uses Pushover's fixed HTTPS endpoint with TLS verification,
+redirects disabled, bounded responses/waiters and at most two shared connections.
+Engine/Admin need the same data mount and compatible UID for leases in
+`/app/data/pushover/locks`, as in the standard Compose deployment. Failures never
+block answering, transfer, hangup or cleanup. Generation and delivery have separate
+diagnostics and a combined outer timeout budget.
+
+Credentials are staged in immutable owner-only managed secret files. Normal tool
+configuration and API responses contain references, never plaintext keys. Replaced,
+cleared or abandoned draft references may leave retired files for captured calls
+and rollback. Remove them manually only after no retained configuration/call uses
+them. Never copy secret files into exports or public PRs.
+
+Diagnostics distinguish accepted, rejected, uncertain, timeout, capacity, skipped
+and suppressed results. Acceptance means API queuing, not phone display or operator
+acknowledgement. There is no automatic retry after uncertain delivery/cancellation.
+Explicit rejections open a temporary five-minute circuit. Duplicate protection is
+per call and named tool, with later caller turns/transfer attempts allowing a new
+update and a 64-event call limit. Different named tools remain independent.
+Protection is best effort and in-memory; restart replay, exactly-once delivery,
+emergency acknowledgement workflows and attachments are not implemented.
 
 Official API checked October 23, 2026: [Pushover API](https://pushover.net/api).
-Messages use `POST /1/messages.json`, recipient validation uses
-`POST /1/users/validate.json`. Acceptance requires HTTP 200 and JSON `status=1`.
-Titles are limited to 250 characters and bodies to 1,024 Unicode characters.
-Quota exhaustion is a rejection, not success. Tests use synthetic conversations
-and mocked model/network clients; they send no real notifications.
-
-For live acceptance, configure an authorized test recipient through the UI. Verify
-arrival after enrichment, briefing before transfer, AI-handled completion,
-failed-transfer completion, duplicate protection, and cleanup. Test calls and
-real notification acceptance are separate from mocked automated coverage.
+Sending uses `POST /1/messages.json`, validation uses `POST /1/users/validate.json`;
+acceptance requires HTTP 200 and JSON integer `status=1`. Automated verification
+uses synthetic conversations and mocked clients. Live acceptance requires an
+operator-configured recipient and calls testing chosen phases, summary/provider
+failure, duplicate handling, transfer outcomes, continuation and cleanup.

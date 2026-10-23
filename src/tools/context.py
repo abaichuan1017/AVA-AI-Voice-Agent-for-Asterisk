@@ -247,6 +247,7 @@ class PreCallContext:
     pre_call_results: Dict[str, str] = field(default_factory=dict)
     call_metadata: Dict[str, str] = field(default_factory=dict)
     execution_results: Dict[str, Any] = field(default_factory=dict)
+    notification_state: Any = None
 
     
     def get_config_value(self, key: str, default: Any = None) -> Any:
@@ -315,6 +316,7 @@ class PostCallContext:
     
     execution_results: Dict[str, Any] = field(default_factory=dict)
     transfer_destination: Optional[str] = None
+    notification_state: Any = None
 
     def to_payload_dict(self) -> Dict[str, Any]:
         """

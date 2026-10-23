@@ -677,6 +677,11 @@ Tool Definitions:
             
             kind = tool_config.get('kind', '')
             
+            if kind == 'pushover':
+                from src.tools.pushover import PushoverTool
+                self.register_instance(PushoverTool(tool_name, tool_config))
+                continue
+
             if kind == 'generic_http_lookup':
                 try:
                     from src.tools.http.generic_lookup import create_http_lookup_tool
@@ -737,6 +742,11 @@ Tool Definitions:
                     tool_name,
                 )
                 kind = 'in_call_http_lookup'
+
+            if kind == 'pushover':
+                from src.tools.pushover import PushoverTool
+                self.register_instance(PushoverTool(tool_name, tool_config))
+                continue
 
             if kind == 'in_call_http_lookup':
                 try:
