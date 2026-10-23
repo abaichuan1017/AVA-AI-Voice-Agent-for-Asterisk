@@ -132,3 +132,14 @@ async def test_summary_disabled_preserves_legacy_summary_parameter():
     assert [p.name for p in tool.definition.parameters]==['summary']
     enabled=make_tool(parameters=[{'name':'summary','type':'string','required':True}])
     assert enabled.definition.parameters==[]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('before_request,expected', [(True,'skipped'),(False,'uncertain')])
+async def test_combined_timeout_reports_whether_delivery_started(before_request,expected):
+    context,_=make_context();context.session_store=None
+    notify=InCallHTTPTool(InCallHTTPConfig(name='timeout',url='https://example.com',timeout_ms=1))
+    async def blocked(*args):await asyncio.Event().wait()
+    if before_request:notify._build_substitution_context=blocked
+    else:notify._execute_request=blocked
+    result=await notify.execute({},context)
+    assert result['status']=='timeout' and result['delivery_status']==expected

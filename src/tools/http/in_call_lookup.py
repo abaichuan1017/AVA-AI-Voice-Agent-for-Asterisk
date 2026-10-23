@@ -160,7 +160,9 @@ class InCallHTTPTool(Tool):
         if not self.config.enabled or not self.config.url:
             return {"status": "failed" if not self.config.enabled else "error", "message": self.config.error_message}
         diagnostics = {"internal_notification": True} if self.config.generate_summary else {}
+        delivery_started = False
         async def run():
+            nonlocal delivery_started
             values = await self._build_substitution_context(parameters, context)
             if self.config.generate_summary:
                 history = await snapshot_history(context)
@@ -178,11 +180,12 @@ class InCallHTTPTool(Tool):
                 live = await context.get_session()
                 if getattr(live, "cleanup_in_progress", False) or getattr(live, "cleanup_completed", False):
                     return {"status": "cancelled", "delivery_status": "skipped"}
+            delivery_started = True
             return await self._execute_request(parameters, context, values)
         try:
             result = await asyncio.wait_for(run(), timeout=self.definition.timeout_ms / 1000)
         except asyncio.TimeoutError:
-            result = {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain"}
+            result = {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain" if delivery_started else "skipped"}
         except Exception:
             result = {"status": "error", "message": self.config.error_message, "delivery_status": "skipped"}
         return {**result, **diagnostics}
