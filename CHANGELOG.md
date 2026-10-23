@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Onward transfers preserve the caller** ([#699](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues/699)):
+  after an accepted AVA attended handoff, adopt Asterisk's replacement human leg
+  before normal Stasis routing. The original extension's teardown no longer
+  destroys the caller bridge or restarts the AI. Duplicate/repeated replacements
+  preserve ownership; genuine caller/destination hangups still clean up once.
+
 - **Telnyx and MiniMax tool calls:** keep a tool call whose `arguments` is an
   empty string, null or an object. A parameterless call such as `hangup_call`
   used to fail `json.loads("")` and be dropped with only a warning.

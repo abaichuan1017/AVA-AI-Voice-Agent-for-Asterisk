@@ -4604,6 +4604,11 @@ class Engine:
                    is_caller=self._is_caller_channel(channel),
                    is_local=self._is_local_channel(channel))
 
+        # A transferred human leg may enter Stasis with no action args and
+        # a Local/ name. Adopt it before either caller or media classification.
+        if event.get("replace_channel") and await self._handle_attended_transfer_replacement(event):
+            return
+
         # Selected media legs may carry driver/application args. Classify them
         # before interpreting any Stasis arg as an agent action, otherwise an
         # auxiliary channel could enter caller/business routing.
@@ -7912,6 +7917,98 @@ class Engine:
         except Exception:
             logger.debug("Failed to stop provider after predial bridge", call_id=call_id, exc_info=True)
 
+    async def _handle_attended_transfer_replacement(self, event: dict) -> bool:
+        """Adopt Asterisk's replacement leg without re-entering AI/media setup.
+
+        The StasisStart channel replaces event.replace_channel (the old leg).
+        Only a completed attended handoff can confer ownership. Serialize that
+        ownership change with cleanup's terminal claim; no ARI I/O is needed.
+        """
+        channel = event.get("channel") or {}
+        replaced = event.get("replace_channel") or {}
+        if not isinstance(channel, dict) or not isinstance(replaced, dict):
+            return False
+        channel_id = channel.get("id")
+        old_channel_id = replaced.get("id")
+        if not channel_id or not old_channel_id:
+            return False
+        if not (self._is_caller_channel(channel) or self._is_local_channel(channel)):
+            return False
+
+        async with _cleanup_lock:
+            channel_map = self._attended_transfer_agent_channel_to_call_id
+            call_id = channel_map.get(old_channel_id) or channel_map.get(channel_id)
+            if call_id:
+                candidates = [await self.session_store.get_by_call_id(call_id)]
+            else:
+                # A duplicate can arrive after more than one onward transfer.
+                # The existing action keeps retired IDs until this call ends.
+                candidates = await self.session_store.get_all_sessions()
+            session = None
+            for candidate in candidates:
+                if candidate is None:
+                    continue
+                action = candidate.current_action or {}
+                if (
+                    action.get("type") != "attended_transfer"
+                    or not action.get("answered")
+                    or action.get("decision") != "accepted"
+                    or not candidate.transfer_destination
+                    or not candidate.bridge_id
+                    or getattr(candidate, "transfer_active", False)
+                ):
+                    continue
+                retired = action.get("replaced_agent_channel_ids") or []
+                active_id = action.get("agent_channel_id")
+                if old_channel_id in retired and channel_id in [active_id, *retired]:
+                    return True  # Duplicate/stale StasisStart, never replay setup.
+                if active_id == old_channel_id and channel_map.get(old_channel_id) == candidate.call_id:
+                    session = candidate
+                    break
+            if session is None:
+                return False
+
+            # Never reassign a caller/media/other call's existing channel.
+            indexed = await self.session_store.get_by_channel_id(channel_id)
+            other_call_id = channel_map.get(channel_id) or self._predial_transfer_channel_to_call_id.get(channel_id)
+            if indexed is not None or (other_call_id and other_call_id != session.call_id):
+                logger.warning(
+                    "Rejected attended transfer replacement with conflicting ownership",
+                    call_id=session.call_id, channel_id=channel_id,
+                    replaced_channel_id=old_channel_id,
+                )
+                return True
+            if session.cleanup_in_progress or session.cleanup_completed:
+                # Cleanup already owns this call. Do not resurrect its session
+                # or leave an untracked replacement behind.
+                ending = True
+            else:
+                ending = False
+                action = session.current_action
+                retired = list(action.get("replaced_agent_channel_ids") or [])
+                if old_channel_id != channel_id:
+                    retired.append(old_channel_id)
+                    action["replaced_agent_channel_ids"] = retired
+                    action["agent_channel_id"] = channel_id
+                    decision_digit = self._attended_transfer_dtmf_digits.get(
+                        old_channel_id, action.get("decision_digit")
+                    )
+                    self.register_attended_transfer_agent_channel(session.call_id, channel_id)
+                    if decision_digit is not None:
+                        self._attended_transfer_dtmf_digits[channel_id] = str(decision_digit)
+                    self._unregister_attended_transfer_agent_channel(old_channel_id)
+
+        if ending:
+            await self.ari_client.hangup_channel(channel_id)
+        else:
+            await self._save_session(session, require_current=True)
+            logger.info(
+                "Attended transfer ownership moved to replacement channel",
+                call_id=session.call_id, channel_id=channel_id,
+                replaced_channel_id=old_channel_id, bridge_id=session.bridge_id,
+            )
+        return True
+
     def register_attended_transfer_agent_channel(self, call_id: str, agent_channel_id: str) -> None:
         """Register an attended transfer agent channel to resolve DTMF events back to a call."""
         if agent_channel_id:
@@ -10094,6 +10191,7 @@ class Engine:
         """Shared cleanup for StasisEnd/ChannelDestroyed paths."""
         resolved_call_id = None  # Track for finally block cleanup
         cleanup_owned = False
+        attended_agent_cleanup = False
         try:
             # Resolve session by call_id first, then fallback to channel lookup.
             session = await self.session_store.get_by_call_id(channel_or_call_id)
@@ -10132,6 +10230,7 @@ class Engine:
                         )
                         return
                     session = mapped_session
+                    attended_agent_cleanup = True
             if not session:
                 predial_channel_map = getattr(self, "_predial_transfer_channel_to_call_id", {})
                 mapped_call_id = predial_channel_map.get(channel_or_call_id)
@@ -10214,6 +10313,16 @@ class Engine:
             
             # In-memory re-entrancy guard - use lock for atomicity (AAVA-148)
             async with _cleanup_lock:
+                if attended_agent_cleanup:
+                    # Replacement adoption may have won while this handler
+                    # awaited session resolution/the cleanup lock. Only the
+                    # current human leg can claim whole-call teardown.
+                    action = session.current_action or {}
+                    if (
+                        self._attended_transfer_agent_channel_to_call_id.get(channel_or_call_id) != call_id
+                        or str(action.get("agent_channel_id") or "") not in ("", str(channel_or_call_id))
+                    ):
+                        return
                 if call_id in _cleanup_in_progress:
                     logger.debug("Cleanup already in progress (in-memory guard)", call_id=call_id)
                     return

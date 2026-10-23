@@ -260,6 +260,30 @@ AI: "Transferring you to Sales team ring group now."
 - On accept: AI audio is removed and the engine bridges **caller ↔ destination** directly.
 - On decline/timeout: MOH stops and the AI resumes with the caller (optionally plays a short “unable to transfer” prompt).
 - Engine remains alive as a passive bridge supervisor until hangup.
+- After an accepted handoff, a phone-initiated onward transfer can replace the
+  destination leg. AVA adopts the new channel identified by
+  `StasisStart.replace_channel`, keeps the existing caller bridge, and retires the
+  old leg's cleanup ownership. It does not replay announcements or restart the AI.
+  Initial pickup still follows the normal announcement and acceptance flow.
+  Duplicate replacement events are ignored; the active destination or caller
+  ending still triggers normal cleanup. Unknown replacement relationships do not
+  acquire ownership of an existing call.
+
+**Onward-transfer validation (#699)**:
+
+1. Call AVA, request an attended transfer to extension A, answer A, and accept it.
+2. Use A's phone transfer button to blind-transfer the external caller to B.
+3. Confirm B rings and can answer with two-way audio. Repeat B → C if available.
+4. Confirm the engine logs **Attended transfer ownership moved to replacement
+   channel**, with no caller cleanup when an old extension leaves.
+5. Hang up the final destination, then repeat with the external caller hanging up.
+   Each call must leave one history record, run post-call hooks once, and retire
+   its bridge and tracked channels. Also check busy/no-answer onward destinations.
+
+This path has automated ARI event coverage. Qualify the patch on the target
+Asterisk/FreePBX and handset combination before treating it as live verified.
+Deploy the engine change after active calls finish; no configuration or database
+migration is required. Existing in-memory sessions are not recovered on restart.
 
 **Key constraints**:
 - This tool is separate from `transfer`; it does **not** change existing transfer behavior.
