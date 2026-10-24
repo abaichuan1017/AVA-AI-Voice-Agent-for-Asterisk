@@ -28,3 +28,11 @@ Internal acknowledgements remain tool data, with conversation/tool continuation.
 The operator's agent instructions should say when to invoke the tool and what to
 say naturally after success or failure. Do not put notification acknowledgements
 into the voice script.
+
+HTTP delivery diagnostics distinguish accepted 2xx responses, explicit 4xx
+rejections (except ambiguous 408 timeouts), uncertain transport/server failures,
+and requests skipped before dispatch. A successful HTTP response can still have
+an invalid or oversized body: delivery remains accepted while result processing
+reports its own error. HTTP acceptance does not establish application-side success.
+Pipeline snapshots retain the recorded caller turn once even when assistant text
+follows it; a genuinely pending caller turn is still included separately.

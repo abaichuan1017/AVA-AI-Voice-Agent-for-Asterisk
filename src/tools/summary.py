@@ -29,7 +29,9 @@ async def snapshot_history(context):
     session = await context.get_session()
     history = copy.deepcopy(getattr(session, "conversation_history", []) or [])
     latest = str(context.user_input or "").strip()
-    if latest and not (history and history[-1].get("role") == "user" and history[-1].get("content") == latest):
+    if latest and not getattr(context, "user_input_recorded", False) and not (
+        history and history[-1].get("role") == "user" and history[-1].get("content") == latest
+    ):
         history.append({"role": "user", "content": latest})
     return history
 

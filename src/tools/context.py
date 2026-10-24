@@ -78,6 +78,7 @@ class ToolExecutionContext:
     
     # Request metadata
     user_input: Optional[str] = None  # Original user utterance
+    user_input_recorded: bool = False  # Trusted caller path already persisted this turn
     detected_intent: Optional[str] = None
     confidence: Optional[float] = None
 

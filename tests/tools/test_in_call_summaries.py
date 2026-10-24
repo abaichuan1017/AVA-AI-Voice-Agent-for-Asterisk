@@ -1,14 +1,14 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.post_call_summary import SummaryGenerationResult
 from src.tools.context import ToolExecutionContext
 from src.tools.http.in_call_lookup import InCallHTTPConfig, InCallHTTPTool
-from src.tools.summary import generate_summary, summary_prompt
+from src.tools.summary import generate_summary, summary_prompt, snapshot_history
 
 
 def make_tool(**kw):
@@ -143,3 +143,77 @@ async def test_combined_timeout_reports_whether_delivery_started(before_request,
     else:notify._execute_request=blocked
     result=await notify.execute({},context)
     assert result['status']=='timeout' and result['delivery_status']==expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recorded", [True, False])
+async def test_caller_turn_identity_survives_following_assistant_response(recorded):
+    context, session = make_context()
+    context.user_input = "Please help"
+    context.user_input_recorded = recorded
+    # The same words may be a recorded current turn or a genuinely new utterance.
+    session.conversation_history = [{"role": "user", "content": "Please help"}, {"role": "assistant", "content": "I can help"}]
+    history = await snapshot_history(context)
+    assert history.count({"role": "user", "content": "Please help"}) == (1 if recorded else 2)
+    assert len(session.conversation_history) == 2
+    history[0]["content"] = "snapshot mutation"
+    assert session.conversation_history[0]["content"] == "Please help"
+
+
+@pytest.mark.asyncio
+async def test_summary_generator_gets_recorded_pipeline_caller_once():
+    generator = AsyncMock(return_value=SummaryGenerationResult(text="Factual recap", provider="mock_llm", status="ok"))
+    context, session = make_context(generator)
+    session.conversation_history.extend([{"role": "user", "content": context.user_input}, {"role": "assistant", "content": "Checking"}])
+    context.user_input_recorded = True
+    notify = make_tool()
+    notify._execute_request = AsyncMock(return_value={"status": "success"})
+    await notify.execute({}, context)
+    snapshot = generator.await_args.kwargs["conversation_history"]
+    assert sum(row.get("content") == context.user_input for row in snapshot) == 1
+    assert session.conversation_history[-1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http_status,body,headers,delivery,processing", [
+    (200, b"{}", {}, "accepted", "success"),
+    (400, b"{}", {}, "rejected", "failed"),
+    (429, b"{}", {}, "rejected", "failed"),
+    (408, b"{}", {}, "uncertain", "failed"),
+    (500, b"{}", {}, "uncertain", "failed"),
+    (200, b"invalid-json", {}, "accepted", "error"),
+    (200, b"{}", {"Content-Length": "999999"}, "accepted", "error"),
+])
+async def test_http_delivery_is_independent_of_response_processing_and_persisted(monkeypatch, http_status, body, headers, delivery, processing):
+    from src.tools.execution_history import build_in_call_tool_record
+    async def chunks(_size):
+        yield body
+    response = SimpleNamespace(status=http_status, headers=headers, charset="utf-8", content=SimpleNamespace(iter_chunked=chunks))
+    request_cm = MagicMock(__aenter__=AsyncMock(return_value=response), __aexit__=AsyncMock(return_value=None))
+    session = SimpleNamespace(request=MagicMock(return_value=request_cm))
+    session_cm = MagicMock(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=None))
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **_kwargs: session_cm)
+    generator = AsyncMock(return_value=SummaryGenerationResult(text="Factual recap", provider="mock_llm", status="ok"))
+    context, _ = make_context(generator)
+    result = await make_tool().execute({}, context)
+    assert result["status"] == processing
+    assert result["delivery_status"] == delivery and result["http_status"] == http_status
+    record = build_in_call_tool_record(call_id=context.call_id, tool_call_id="synthetic-delivery", tool_name="brief", parameters={}, result=result)
+    assert record["delivery_status"] == delivery and record["summary_status"] == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("network", [True, False])
+async def test_http_network_failure_is_uncertain_but_invalid_template_is_skipped(monkeypatch, network):
+    import aiohttp
+    request_cm = MagicMock(__aenter__=AsyncMock(side_effect=aiohttp.ClientConnectionError("synthetic")), __aexit__=AsyncMock(return_value=None))
+    session = SimpleNamespace(request=MagicMock(return_value=request_cm))
+    session_cm = MagicMock(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=None))
+    client = MagicMock(return_value=session_cm)
+    monkeypatch.setattr("aiohttp.ClientSession", client)
+    generator = AsyncMock(return_value=SummaryGenerationResult(text="Factual recap", provider="mock_llm", status="ok"))
+    context, _ = make_context(generator)
+    config = {} if network else {"headers": {"Content-Type": "application/json"}, "body_template": '{"broken":'}
+    result = await make_tool(**config).execute({}, context)
+    assert result["delivery_status"] == ("uncertain" if network else "skipped")
+    assert result["summary_status"] == "ok" and client.called == network
