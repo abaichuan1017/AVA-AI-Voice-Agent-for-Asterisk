@@ -180,6 +180,10 @@ async def test_summary_failures_cleanup_and_disabled_tool_fail_closed(policy, se
         notify.sender.send.await_count == sends and result["summary_status"] == "error"
     )
     assert "private failure" not in str(result)
+    if sends:
+        assert notify.sender.send.await_args.kwargs["message"]["message"].endswith(
+            "Summary: unavailable"
+        )
     session.cleanup_in_progress = True
     assert (await notify.execute({}, live))["delivery_status"] == "skipped"
     notify.config.enabled = False
@@ -446,7 +450,14 @@ async def test_arrival_waits_for_enrichment_and_diagnostics_do_not_become_prompt
         order.append("arrival")
         return {"delivery_status": "accepted"}
 
-    arrival = tool("pre_call", sender=SimpleNamespace(send=send))
+    arrival = tool(
+        "pre_call",
+        cfg=configured(
+            "pre_call",
+            body="{name} | {company}\nCaller: {caller_number}\nCall: {call_id}",
+        ),
+        sender=SimpleNamespace(send=send),
+    )
     session.tool_runtime_registry = SimpleNamespace(
         get_tools_for_context=lambda **kwargs: [arrival, enrichment]
     )
@@ -821,3 +832,68 @@ def test_legacy_initializers_reject_invalid_native_entries_without_replacing_too
     captured = registry.get("good_notice")
     initialize({"good_notice": {**valid, "description": "replacement"}})
     assert registry.get("good_notice") is captured
+
+
+@pytest.mark.parametrize("phase", ["pre_call", "in_call", "post_call"])
+@pytest.mark.parametrize("body", [None, ""])
+def test_public_default_fallback_is_generic_and_omits_disabled_summary(phase, body):
+    raw = {"phase": phase, **({"body": body} if body is not None else {})}
+    cfg = PushoverToolConfig.model_validate(raw)
+    values = {
+        "agent": "Example Agent",
+        "caller_number": "+15550102030",
+        "call_id": "synthetic-default",
+        "outcome": "caller_hangup",
+        "company": "Optional Company",
+        "crm_status": "optional-match",
+        "name": "Optional Name",
+        "summary": "unused recap",
+        "summary_status": "disabled",
+    }
+    result = render_message(cfg, phase, values)
+    expected = "Caller: +15550102030\nCall: synthetic-default"
+    if phase == "post_call":
+        expected += "\nOutcome: caller_hangup"
+    assert result["message"] == expected
+    assert (
+        result["title"]
+        == {
+            "pre_call": "Example Agent: incoming call",
+            "in_call": "Example Agent: call update",
+            "post_call": "Example Agent: call complete",
+        }[phase]
+    )
+    assert not any(
+        text in result["message"]
+        for text in (
+            "Company",
+            "CRM",
+            "Summary",
+            "unknown",
+            "unavailable",
+            "unused recap",
+        )
+    )
+
+
+@pytest.mark.parametrize("phase", ["in_call", "post_call"])
+@pytest.mark.parametrize("summary,status", [("Factual recap", "ok"), ("", "timeout")])
+def test_public_default_appends_only_requested_summary_and_reports_unavailable(
+    phase, summary, status
+):
+    cfg = configured(phase, generate_summary=True, summary_provider="test_llm")
+    result = render_message(
+        cfg,
+        phase,
+        {
+            "caller_number": "123",
+            "call_id": "synthetic",
+            "outcome": "failed_transfer",
+            "summary": summary,
+            "summary_status": status,
+        },
+    )
+    assert result["message"].endswith("Summary: " + (summary or "unavailable"))
+    assert "CRM" not in result["message"] and "Company" not in result["message"]
+    if phase == "post_call":
+        assert "Outcome: failed_transfer" in result["message"]

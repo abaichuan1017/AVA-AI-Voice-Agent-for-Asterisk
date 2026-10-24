@@ -4,6 +4,7 @@ import { FormInput, FormSelect, FormLabel, FormSwitch } from '../ui/FormComponen
 
 import {
     pushoverDocument,
+    pushoverDefaults,
     pushoverRecipients,
     applyPushoverRefs,
     credentialPayload,
@@ -31,6 +32,7 @@ export function PushoverToolFields({
         setPreview(null);
     };
     const recipients = pushoverRecipients(value);
+    const defaults = pushoverDefaults(value.phase, Boolean(value.generate_summary));
     const updateRecipient = (id: string, patch: Partial<PushoverRecipient>) =>
         change('recipients', { ...recipients, [id]: { ...recipients[id], ...patch } });
     const addRecipient = () => {
@@ -225,7 +227,7 @@ export function PushoverToolFields({
                 label="Notification title"
                 value={value.title || ''}
                 onChange={e => change('title', e.target.value)}
-                placeholder="{agent}: call update"
+                placeholder={defaults.title}
             />
             <div>
                 <FormLabel
@@ -239,10 +241,11 @@ export function PushoverToolFields({
                     className="w-full min-h-32 rounded border border-input bg-background p-3 font-mono text-sm"
                     value={value.body || ''}
                     onChange={e => change('body', e.target.value)}
-                    placeholder="{name} | {caller_number}&#10;Summary ({summary_status}): {summary}&#10;Call: {call_id}"
+                    placeholder={defaults.body}
                 />
                 <p className="text-xs text-muted-foreground">
-                    Variables:{' '}
+                    Leave blank to use the phase default; a summary is included only when enabled.
+                    Optional custom variables:{' '}
                     {
                         '{agent}, {name}, {company}, {crm_status}, {caller_number}, {callback_number}, {called_number}, {destination}, {call_id}, {outcome}, {language}, {meeting}, {summary}, {summary_status}'
                     }

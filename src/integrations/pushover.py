@@ -53,9 +53,18 @@ DEFAULT_TITLES = {
     "post_call": "{agent}: call complete",
 }
 DEFAULT_BODIES = {
-    phase: "{name} | {company}\nCaller: {caller_number}\nCallback: {callback_number}\nCRM: {crm_status}\n{stage}: {destination}\nOutcome: {outcome}\nCall: {call_id}\nSummary ({summary_status}): {summary}"
-    for phase in PHASES
+    "pre_call": "Caller: {caller_number}\nCall: {call_id}",
+    "in_call": "Caller: {caller_number}\nCall: {call_id}",
+    "post_call": "Caller: {caller_number}\nCall: {call_id}\nOutcome: {outcome}",
 }
+
+
+def default_body(phase, *, generate_summary=False):
+    """Keep public defaults generic and omit unused summary placeholders."""
+    body = DEFAULT_BODIES[phase]
+    if phase != "pre_call" and generate_summary:
+        body += "\nSummary: {summary}"
+    return body
 
 
 class StrictConfig(BaseModel):
@@ -169,7 +178,9 @@ def render_message(config, phase, values):
         return "".join(parts)
 
     title = render(settings.title or DEFAULT_TITLES[phase], values)[:250]
-    body_template = settings.body or DEFAULT_BODIES[phase]
+    body_template = settings.body or default_body(
+        phase, generate_summary=settings.generate_summary
+    )
     base = render(body_template, {**values, "summary": ""})
     count = sum(
         1 for _, name, _, _ in Formatter().parse(body_template) if name == "summary"

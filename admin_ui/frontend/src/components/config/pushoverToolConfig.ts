@@ -23,6 +23,19 @@ export interface PushoverDraft {
     suppress_after_tool?: string;
     [key: string]: unknown;
 }
+// Blank saved templates intentionally use the matching runtime fallback. Changing
+// summary settings updates the hint/default without rewriting custom templates.
+export function pushoverDefaults(phase = 'in_call', generateSummary = false) {
+    const titles: Record<string, string> = {
+        pre_call: '{agent}: incoming call',
+        in_call: '{agent}: call update',
+        post_call: '{agent}: call complete',
+    };
+    let body = 'Caller: {caller_number}\nCall: {call_id}';
+    if (phase === 'post_call') body += '\nOutcome: {outcome}';
+    if (phase !== 'pre_call' && generateSummary) body += '\nSummary: {summary}';
+    return { title: titles[phase] || titles.in_call, body };
+}
 export function pushoverRecipients(value: PushoverDraft): Record<string, PushoverRecipient> {
     if (value.recipients !== undefined) return value.recipients || {};
     if (value.key_file || value.recipient_label)

@@ -70,6 +70,41 @@ The unreleased integration-panel prototype's top-level `pushover` document is
 retained for rollback but does not execute or create tool assignments. Configure
 named tools through this workflow; no prototype recipient/policy is auto-enabled.
 
+## Generic defaults and optional enrichment
+
+Leave the title/body blank to use the public phase defaults. Titles contain the
+agent and phase. Arrival and in-call bodies contain the caller number and call ID;
+completion also includes the actual observed outcome. In-call/completion defaults
+append the generated summary only when **Generate AI Summary** is enabled. A failed
+requested summary displays `unavailable` and keeps separate failure diagnostics.
+With generation disabled, the built-in body has no empty summary/status line.
+
+For example, a completion with summaries enabled uses:
+
+```text
+Caller: {caller_number}
+Call: {call_id}
+Outcome: {outcome}
+Summary: {summary}
+```
+
+Company, CRM, callback, destination, language and meeting fields are optional
+customizations. Existing saved templates remain unchanged across edits and upgrades.
+An operator who already has a custom template can clear it to opt into the generic
+fallback. AVA never replaces a saved CRM-oriented body automatically.
+
+Optional enrichment example (requires existing trusted enrichment; not a default):
+
+```text
+Caller: {caller_number}
+Call: {call_id}
+Name: {name}
+Company: {company}
+CRM: {crm_status}
+Outcome: {outcome}
+Summary: {summary}
+```
+
 ## Templates and trusted data
 
 Templates support `{agent}`, `{context_name}`, `{stage}`, `{name}`, `{caller_name}`,

@@ -1336,12 +1336,14 @@ def _reserved_builtin_names() -> frozenset:
     return _reserved_builtin_cache
 
 
-def _validate_tool_name(name: str) -> None:
+def _validate_tool_name(name: str, *, max_length: Optional[int] = None) -> None:
     if not name or not _TOOL_NAME_RE.match(name):
         raise HTTPException(
             status_code=422,
             detail="Invalid tool name: use letters, digits and underscores, and start with a letter",
         )
+    if max_length is not None and len(name) > max_length:
+        raise HTTPException(status_code=422, detail=f"Pushover tool names must be at most {max_length} characters")
     if name in RESERVED_TOOL_NAMES:
         raise HTTPException(status_code=422, detail=f"'{name}' is a reserved tool name")
     if name.startswith("mcp_"):
@@ -1535,7 +1537,7 @@ async def list_managed_tools():
 async def create_managed_tool(body: ManagedToolWrite):
     """Create a new managed HTTP tool and persist it to the config."""
     name = (body.name or "").strip()
-    _validate_tool_name(name)
+    _validate_tool_name(name, max_length=64 if body.kind == "pushover" else None)
 
     cfg = _load_cfg()
     if _raw_name_exists(cfg, name):
@@ -1567,7 +1569,7 @@ async def get_managed_tool(name: str):
 @router.put("/managed/{name}", response_model=ManagedToolOut)
 async def replace_managed_tool(name: str, body: ManagedToolWrite):
     """Replace a managed HTTP tool's full configuration (changing phase moves it between blocks)."""
-    _validate_tool_name(name)
+    _validate_tool_name(name, max_length=64 if body.kind == "pushover" else None)
     cfg = _load_cfg()
     cur_block, _ = _find_managed_tool(cfg, name)
     if cur_block is None:
@@ -1645,6 +1647,7 @@ async def patch_managed_tool(name: str, body: ManagedToolPatch):
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if merged["kind"] == "pushover":
+        _validate_tool_name(name, max_length=64)
         if "recipients" in patch and patch["recipients"] is None:
             merged["recipients"] = {}
         merged = _build_tool_doc(merged, new_phase)

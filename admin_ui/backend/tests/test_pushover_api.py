@@ -293,3 +293,108 @@ def test_patch_cannot_convert_pushover_to_http(client, phase, http_kind):
             ).status_code
             == 200
         )
+
+
+@pytest.mark.parametrize("phase", ["pre_call", "in_call", "post_call"])
+def test_new_default_tools_and_previews_are_generic(client, phase):
+    browser, state, sender, _ = client
+    created = browser.post(
+        "/api/tools/managed",
+        json={"name": "default_notice", "kind": "pushover", "phase": phase},
+    )
+    assert created.status_code == 201, created.text
+    saved = browser.get("/api/tools/managed/default_notice").json()["config"]
+    assert saved["body"] == "" and saved["title"] == ""
+    preview = browser.post("/api/pushover/preview", json={"config": saved})
+    assert preview.status_code == 200
+    expected = "Caller: +15550102030\nCall: synthetic-preview"
+    if phase == "post_call":
+        expected += "\nOutcome: caller_hangup"
+    assert preview.json()["message"] == expected
+    assert not sender.send.called
+
+
+@pytest.mark.parametrize("phase", ["pre_call", "in_call", "post_call"])
+def test_custom_crm_templates_survive_save_reload_patch_and_legacy_upgrade(
+    client, phase
+):
+    browser, _, sender, _ = client
+    body = "Company: {company}\nCRM: {crm_status}\nCaller: {caller_number}\nCustom: {{literal}}"
+    payload = {
+        "name": "custom_notice",
+        "kind": "pushover",
+        "phase": phase,
+        "title": "Custom {agent}",
+        "body": body,
+        "key_file": "/managed/legacy",
+    }
+    created = browser.post("/api/tools/managed", json=payload)
+    assert created.status_code == 201, created.text
+    saved = browser.get("/api/tools/managed/custom_notice").json()["config"]
+    assert saved["body"] == body and saved["title"] == payload["title"]
+    assert saved["recipients"]["legacy"]["key_file"] == payload["key_file"]
+    assert (
+        browser.patch(
+            "/api/tools/managed/custom_notice", json={"enabled": False}
+        ).json()["config"]["body"]
+        == body
+    )
+    assert (
+        browser.put(
+            "/api/tools/managed/custom_notice", json={"name": "custom_notice", **saved}
+        ).json()["config"]["body"]
+        == body
+    )
+    assert (
+        "Company: Example Company\nCRM: unknown"
+        in browser.post("/api/pushover/preview", json={"config": saved}).json()[
+            "message"
+        ]
+    )
+    assert not sender.send.called
+
+
+def test_native_name_limit_matches_runtime_without_changing_http_contract(client):
+    browser, state, _, _ = client
+    native = {"kind": "pushover", "phase": "in_call"}
+    valid_name = "n" * 64
+    invalid_name = "n" * 65
+    assert (
+        browser.post(
+            "/api/tools/managed", json={"name": valid_name, **native}
+        ).status_code
+        == 201
+    )
+    before = copy.deepcopy(state)
+    assert (
+        browser.post(
+            "/api/tools/managed", json={"name": invalid_name, **native}
+        ).status_code
+        == 422
+    )
+    assert state == before
+    http = {
+        "name": invalid_name,
+        "kind": "in_call_http_lookup",
+        "phase": "in_call",
+        "url": "https://example.com",
+    }
+    assert browser.post("/api/tools/managed", json=http).status_code == 201
+    before = copy.deepcopy(state)
+    assert (
+        browser.put(
+            "/api/tools/managed/" + invalid_name, json={"name": invalid_name, **native}
+        ).status_code
+        == 422
+    )
+    assert state == before
+    # Historical invalid native entries also cannot be republished through PATCH.
+    state["in_call_tools"][invalid_name] = native
+    before = copy.deepcopy(state)
+    assert (
+        browser.patch(
+            "/api/tools/managed/" + invalid_name, json={"enabled": False}
+        ).status_code
+        == 422
+    )
+    assert state == before

@@ -104,7 +104,9 @@ every service. Host `./data/` mounts at `/app/data/`; defaults include
   In-call HTTP tools can generate provider-backed summaries before delivery. Native
   Pushover is a named managed tool kind in the same pre/in/post-call workflow,
   with operator-configured credentials/templates, multiple enabled user/group
-  recipients, one summary per invocation, and normal Agent selection.
+  recipients, one summary per invocation, and normal Agent selection. Public defaults
+  use caller number/call ID, completion outcome and an enabled summary; CRM/company
+  fields are optional custom templates, and saved bodies remain unchanged.
   Pre-call sends run after enrichment; in-call use is guided by the configured
   description and Agent prompt. See [Pushover](docs/Pushover.md)
   and [in-call summaries](docs/In-Call-Summaries.md).

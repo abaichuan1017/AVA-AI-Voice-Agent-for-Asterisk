@@ -46,6 +46,14 @@ describe('Pushover in the existing tool editor', () => {
             fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
             fireEvent.change(screen.getByLabelText('Tool type'), { target: { value: 'pushover' } });
             expect(screen.queryByLabelText('URL')).not.toBeInTheDocument();
+            let defaultBody = 'Caller: {caller_number}\nCall: {call_id}';
+            if (phase === 'post_call') defaultBody += '\nOutcome: {outcome}';
+            expect(screen.getByLabelText('Message template')).toHaveValue('');
+            expect(screen.getByLabelText('Message template')).toHaveAttribute(
+                'placeholder',
+                defaultBody
+            );
+
             expect(
                 screen.getByRole('link', { name: /Official Pushover documentation/ })
             ).toHaveAttribute('href', 'https://pushover.net/api');
@@ -83,6 +91,8 @@ describe('Pushover in the existing tool editor', () => {
             });
             expect(doc).not.toHaveProperty('url');
             expect(doc).not.toHaveProperty('parameters');
+            expect(doc).not.toHaveProperty('body');
+            expect(doc).not.toHaveProperty('title');
             expect(JSON.stringify(doc)).not.toContain('a'.repeat(30));
             expect(JSON.stringify(doc)).not.toContain('b'.repeat(30));
             expect(vi.mocked(axios.post).mock.calls.map(([url]) => url)).toEqual([
@@ -123,7 +133,9 @@ describe('Pushover in the existing tool editor', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Update tool' }));
         await waitFor(() => expect(changed).toHaveBeenCalledOnce());
         expect(changed.mock.calls[0][0].notify_sales.token_file).toBe('/managed/application');
-        expect(changed.mock.calls[0][0].notify_sales.recipients.legacy.key_file).toBe('/managed/recipient');
+        expect(changed.mock.calls[0][0].notify_sales.recipients.legacy.key_file).toBe(
+            '/managed/recipient'
+        );
     });
 });
 
@@ -155,4 +167,40 @@ it('adds, disables and removes recipient/group rows without sending', async () =
         recipient_2: { label: 'Sales group', enabled: false, key_file: '' },
     });
     expect(axios.post).not.toHaveBeenCalled();
+});
+
+it('updates generic summary hints without replacing a saved custom CRM template', async () => {
+    const changed = vi.fn();
+    const body = 'Company: {company}\nCRM: {crm_status}\nCaller: {caller_number}';
+    render(
+        <HTTPToolForm
+            phase="in_call"
+            config={{
+                custom_notice: {
+                    kind: 'pushover',
+                    phase: 'in_call',
+                    body,
+                    title: 'Custom {agent}',
+                    enabled: true,
+                    is_global: false,
+                },
+            }}
+            onChange={changed}
+            presentation="page"
+        />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Configure custom_notice' }));
+    const template = screen.getByLabelText('Message template');
+    expect(template).toHaveValue(body);
+    expect(template).toHaveAttribute('placeholder', 'Caller: {caller_number}\nCall: {call_id}');
+    fireEvent.click(screen.getByLabelText('Generate AI Summary'));
+    expect(template).toHaveValue(body);
+    expect(template).toHaveAttribute(
+        'placeholder',
+        'Caller: {caller_number}\nCall: {call_id}\nSummary: {summary}'
+    );
+    fireEvent.click(screen.getByLabelText('Generate AI Summary'));
+    fireEvent.click(screen.getByRole('button', { name: 'Update tool' }));
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(changed.mock.calls[0][0].custom_notice).toMatchObject({ body, title: 'Custom {agent}' });
 });

@@ -453,8 +453,11 @@ rows, templates and optional summary; then Update tool and Save & Apply. Use nor
 Agent selection/global opt-outs. In-call descriptions and Agent prompts govern
 AI invocation; pre/post-call selection governs automatic lifecycle execution.
 
-One invocation generates its summary once and delivers the same content to enabled
-recipients, with individual delivery diagnostics. Preview never sends; recipient
+Public defaults contain caller number and call ID, plus the observed outcome for
+completion. A summary appears only when enabled; CRM/company fields are optional
+custom templates. Saved custom bodies are preserved. One invocation generates its
+summary once and delivers the same content to enabled recipients, with individual
+delivery diagnostics. Preview never sends; recipient
 validation and tests require explicit clicks. The Tool Type selector links to the
 official Pushover documentation. See the complete [Pushover Tool guide](Pushover.md)
 for setup, multiple recipients/groups, prompts, templates, transfer policies,
