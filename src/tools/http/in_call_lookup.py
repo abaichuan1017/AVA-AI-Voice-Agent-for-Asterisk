@@ -13,6 +13,7 @@ import logging
 import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 
 from src.tools.summary import SUMMARY_FIELDS, generate_summary, snapshot_history
 from src.tools.http.path_utils import extract_path
@@ -35,6 +36,9 @@ from src.tools.http.debug_trace import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Context propagates through wait_for tasks without sharing state between calls.
+_http_delivery_state: ContextVar[Optional[Dict[str, Any]]] = ContextVar("http_delivery_state", default=None)
 
 
 @dataclass
@@ -161,6 +165,8 @@ class InCallHTTPTool(Tool):
             return {"status": "failed" if not self.config.enabled else "error", "message": self.config.error_message, "delivery_status": "skipped"}
         diagnostics = {"internal_notification": True} if self.config.generate_summary else {}
         delivery_started = False
+        delivery = {}
+        delivery_token = _http_delivery_state.set(delivery)
         async def run():
             nonlocal delivery_started
             values = await self._build_substitution_context(parameters, context)
@@ -185,9 +191,11 @@ class InCallHTTPTool(Tool):
         try:
             result = await asyncio.wait_for(run(), timeout=self.definition.timeout_ms / 1000)
         except asyncio.TimeoutError:
-            result = {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain" if delivery_started else "skipped"}
+            result = {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain" if delivery_started else "skipped", **delivery}
         except Exception:
-            result = {"status": "error", "message": self.config.error_message, "delivery_status": "uncertain" if delivery_started else "skipped"}
+            result = {"status": "error", "message": self.config.error_message, "delivery_status": "uncertain" if delivery_started else "skipped", **delivery}
+        finally:
+            _http_delivery_state.reset(delivery_token)
         return {**result, **diagnostics}
 
     async def _execute_request(
@@ -211,7 +219,10 @@ class InCallHTTPTool(Tool):
         """
         # Invocation-local transport diagnostics survive response parsing failures.
         # HTTP acceptance describes request delivery, not application-side success.
-        delivery = {"delivery_status": "skipped"}
+        delivery = _http_delivery_state.get()
+        if delivery is None:
+            delivery = {}
+        delivery.setdefault("delivery_status", "skipped")
         if not self.config.enabled:
             logger.debug(f"In-call HTTP tool disabled: {self.config.name}")
             return {

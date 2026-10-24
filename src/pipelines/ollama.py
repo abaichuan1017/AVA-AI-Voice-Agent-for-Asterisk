@@ -35,6 +35,7 @@ from urllib.parse import urlparse
 
 from ..logging_config import get_logger
 from ..tools.execution_history import stable_tool_call_id
+from ..tools.adapters.sanitize import INTERNAL_NOTIFICATION_INSTRUCTIONS
 from ..tools.registry import tool_registry
 from .base import Component, LLMComponent, LLMResponse
 
@@ -266,6 +267,12 @@ class OllamaLLMAdapter(LLMComponent):
                 if role == "system":
                     continue  # System already handled above
                 elif role == "tool":
+                    if context.get("internal_notification"):
+                        messages.append({
+                            "role": "user",
+                            "content": f"{INTERNAL_NOTIFICATION_INSTRUCTIONS}\nInternal tool outcome: {content}",
+                        })
+                        continue
                     # Convert tool result to a user-style message Ollama understands
                     tool_content = content or "Tool executed successfully."
                     # Add as assistant message first acknowledging the tool was called

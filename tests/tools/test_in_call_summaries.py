@@ -217,3 +217,33 @@ async def test_http_network_failure_is_uncertain_but_invalid_template_is_skipped
     result = await make_tool(**config).execute({}, context)
     assert result["delivery_status"] == ("uncertain" if network else "skipped")
     assert result["summary_status"] == "ok" and client.called == network
+
+
+@pytest.mark.asyncio
+async def test_combined_deadline_preserves_known_http_status_without_cross_call_state(monkeypatch):
+    from src.tools.execution_history import build_in_call_tool_record
+    async def stalled_chunks(_size):
+        await asyncio.Event().wait()
+        yield b"{}"
+    response = SimpleNamespace(status=200, headers={}, charset="utf-8", content=SimpleNamespace(iter_chunked=stalled_chunks))
+    async def awaiting_headers():
+        await asyncio.Event().wait()
+    accepted = MagicMock(__aenter__=AsyncMock(return_value=response), __aexit__=AsyncMock(return_value=None))
+    pending = MagicMock(__aenter__=AsyncMock(side_effect=awaiting_headers), __aexit__=AsyncMock(return_value=None))
+    def request(**kwargs):
+        return accepted if kwargs["url"].endswith("accepted") else pending
+    session = SimpleNamespace(request=request)
+    session_cm = MagicMock(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=None))
+    monkeypatch.setattr("aiohttp.ClientSession", lambda **_kwargs: session_cm)
+    generator = AsyncMock(return_value=SummaryGenerationResult(text="Recap", provider="mock_llm", status="ok"))
+    first, _ = make_context(generator, "accepted")
+    second, _ = make_context(generator, "pending")
+    notify = make_tool()
+    notify.config.url = "https://example.com/{call_id}"
+    notify._definition.timeout_ms = 100
+    a, b = await asyncio.gather(notify.execute({}, first), notify.execute({}, second))
+    assert a["status"] == b["status"] == "timeout"
+    assert a["delivery_status"] == "accepted" and a["http_status"] == 200
+    assert b["delivery_status"] == "uncertain" and "http_status" not in b
+    record = build_in_call_tool_record(call_id="accepted", tool_call_id="deadline", tool_name="brief", parameters={}, result=a)
+    assert record["delivery_status"] == "accepted" and record["summary_status"] == "ok"

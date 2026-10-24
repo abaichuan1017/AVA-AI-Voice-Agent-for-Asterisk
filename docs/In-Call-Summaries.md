@@ -21,8 +21,10 @@ bounds the tool. Cancellation propagates to the summary job. Cleanup detected
 before delivery prevents sending. A failure defaults to sending other details
 with an empty summary and explicit unavailable status; choose **Do not send the
 request** when a summary is required. Generation diagnostics are recorded separately
-from delivery status in Call History. An HTTP timeout may leave delivery uncertain;
-applications creating tickets should use their own idempotency key such as call ID.
+from delivery status in Call History. A timeout before response headers may leave
+delivery uncertain; an observed HTTP outcome is retained if body processing hits
+the combined deadline. Applications creating tickets should use their own
+idempotency key such as call ID.
 
 Internal acknowledgements remain tool data, with conversation/tool continuation.
 The operator's agent instructions should say when to invoke the tool and what to
@@ -36,3 +38,8 @@ an invalid or oversized body: delivery remains accepted while result processing
 reports its own error. HTTP acceptance does not establish application-side success.
 Pipeline snapshots retain the recorded caller turn once even when assistant text
 follows it; a genuinely pending caller turn is still included separately.
+
+Modular-pipeline continuations receive only a neutral internal-notification outcome
+and explicit silent-continuation instructions, preserving the captured agent prompt
+and remaining tools. Full notification details stay in Call History. Ollama's
+ordinary tool read-out behavior does not apply to internal notifications.
