@@ -99,6 +99,7 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent, 
 
     // Tool catalog (for the picker) + engine option sources.
     const [catalog, setCatalog] = useState<ToolDef[]>([]);
+    const [catalogLoading, setCatalogLoading] = useState(true);
     const [catalogError, setCatalogError] = useState(false);
     const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set());
     const [transferDestinations, setTransferDestinations] = useState<TransferDestination[]>([]);
@@ -293,6 +294,7 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent, 
     };
 
     const loadCatalog = async () => {
+        setCatalogLoading(true);
         try {
             const res = await axios.get('/api/tools/catalog');
             const tools = Array.isArray(res.data?.tools) ? res.data.tools : [];
@@ -301,6 +303,8 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent, 
         } catch {
             setCatalog([]);
             setCatalogError(true);
+        } finally {
+            setCatalogLoading(false);
         }
     };
 
@@ -777,7 +781,9 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent, 
 
                 </section>
                 <section hidden={section !== 'tools'} className="space-y-5" aria-label="Tool settings">
-                <AgentToolPicker
+                {catalogLoading ? <div role="status" aria-label="Loading tools" className="rounded-lg border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                    Loading tools and selections…
+                </div> : <AgentToolPicker
                     catalog={catalog}
                     catalogError={catalogError}
                     state={toolState}
@@ -787,7 +793,7 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent, 
                     microsoftAccounts={microsoftAccounts}
                     calendlyAppointments={calendlyAppointments}
                     voicemailMailboxes={voicemailMailboxes}
-                />
+                />}
 
 
                 </section>

@@ -192,13 +192,15 @@ re-upgrade compatibility. Browser checks use an isolated sample database, not vo
   database and image compatibility copy, not by modifying live agents.
 - Observed upgrade caveats: an already-open tab displayed the old workspace until
   a normal refresh; authentication survived that refresh. The tool catalog took
-  several seconds to populate and briefly showed zero selections/"No in-call
-  tools available" before the existing two Calendly validation selections and
-  appointment permissions appeared. Wait for the catalog before interpreting its
-  counts; this transient state does not mean settings were cleared. The narrow
-  in-app browser is easier to use with the existing sidebar collapsed.
+  several seconds to populate in the initial staging candidate. The final PR
+  replaces the temporary zero counts/empty message with an accessible "Loading
+  tools and selections…" status until the catalog succeeds or fails. Deferred
+  response tests cover populated, empty and failed catalogs, including preserving
+  saved tool settings when an unrelated appearance edit is saved after failure.
+  The narrow in-app browser is easier to use with the existing sidebar collapsed.
 - This is a detached staging candidate, not a merged release. Use the recorded
   Compose deployment/rollback commands for this candidate; do not use the general
-  Updates page to switch revisions during acceptance. Staging is available for
-  operator review; keep the PR draft until operator acceptance, then freeze and
-  run the final repository CI/review gate before merge.
+  Updates page to switch revisions during acceptance. The operator accepted the
+  staged experience and requested the loading fix before freezing the PR and
+  running final CI/reviews. The deployment above records the initial candidate;
+  check the PR's final validation record for subsequent candidate revisions.
