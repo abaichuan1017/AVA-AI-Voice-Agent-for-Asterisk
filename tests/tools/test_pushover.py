@@ -897,3 +897,68 @@ def test_public_default_appends_only_requested_summary_and_reports_unavailable(
     assert "CRM" not in result["message"] and "Company" not in result["message"]
     if phase == "post_call":
         assert "Outcome: failed_transfer" in result["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ownership", ["current", "cleaning", "removed", "replaced"])
+async def test_arrival_completion_cannot_resurrect_or_replace_call_session(ownership):
+    from src.engine import Engine
+    from src.core.models import CallSession
+    from src.core.session_store import SessionStore
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def send(**kwargs):
+        entered.set()
+        await release.wait()
+        return {"delivery_status": "accepted"}
+
+    engine = Engine.__new__(Engine)
+    engine.session_store = SessionStore()
+    engine.conversation_coordinator = SimpleNamespace(sync_from_session=AsyncMock())
+    engine.config = SimpleNamespace()
+    engine.ari_client = None
+    engine.transport_orchestrator = SimpleNamespace(
+        get_context_config=lambda *args: SimpleNamespace(
+            pre_call_tools=[], disable_global_pre_call_tools=[]
+        )
+    )
+    session = CallSession(
+        call_id="synthetic-ownership",
+        caller_channel_id="old-channel",
+        context_name="pilot",
+    )
+    arrival = tool("pre_call", sender=SimpleNamespace(send=send))
+    session.tool_runtime_registry = SimpleNamespace(
+        get_tools_for_context=lambda **kwargs: [arrival]
+    )
+    session.tool_runtime_config = {"tools": {}}
+    await engine.session_store.upsert_call(session)
+    running = asyncio.create_task(
+        engine._execute_pre_call_tools(session.call_id, session)
+    )
+    await asyncio.wait_for(entered.wait(), 1)
+    replacement = None
+    if ownership == "cleaning":
+        session.cleanup_in_progress = True
+    elif ownership in ("removed", "replaced"):
+        await engine.session_store.remove_call(session.call_id)
+        if ownership == "replaced":
+            replacement = CallSession(
+                call_id=session.call_id, caller_channel_id="new-channel"
+            )
+            await engine.session_store.upsert_call(replacement)
+    release.set()
+    await asyncio.wait_for(running, 1)
+    current = await engine.session_store.get_by_call_id(session.call_id)
+    if ownership == "removed":
+        assert current is None
+    elif ownership == "replaced":
+        assert current is replacement and current.pre_call_tool_calls == []
+    else:
+        assert current is session
+    assert engine.conversation_coordinator.sync_from_session.await_count == (
+        1 if ownership == "current" else 0
+    )
+    if ownership in ("removed", "replaced"):
+        assert await engine.session_store.get_by_channel_id("old-channel") is None

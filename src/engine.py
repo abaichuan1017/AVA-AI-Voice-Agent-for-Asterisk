@@ -23263,7 +23263,7 @@ class Engine:
             await asyncio.gather(*(run_tool_with_timeout(tool) for tool in arrival_tools))
             # Execution metadata for the call history UI (one entry per tool).
             session.pre_call_tool_calls = tool_call_records
-            await self._save_session(session)
+            await self._save_session(session, require_current=True)
             
             logger.info("Pre-call tools completed",
                        call_id=call_id,
