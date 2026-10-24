@@ -331,6 +331,105 @@ async def test_remote_cancelled_is_not_active_success(setup):
     assert result["status"] != "success" and fake.posts == 1
 
 
+async def cancelled_test(setup):
+    store, service, fake, cfg = setup
+    old = await service.book(cfg, 'setup:old', await propose(service, fake, cfg, 'setup:old', setup=True))
+    fake.event['status'] = fake.invitee['status'] = 'canceled'
+    return old
+
+
+async def test_new_call_can_book_positively_cancelled_duplicate_without_replaying_old_operation(setup):
+    store, service, fake, cfg = setup
+    old = await cancelled_test(setup)
+    params = await propose(service, fake, cfg, 'call:new')
+    result = await service.book(cfg, 'call:new', params)
+    assert result['reservation_status'] == 'confirmed' and fake.posts == 2
+    assert store.attempt(old['attempt_reference'])['state'] == 'verified_cancelled'
+    assert (await service.book(cfg, 'setup:old', {}))['reservation_status'] == 'verified_cancelled'
+    assert fake.posts == 2
+    store.cleanup(['new'])
+    assert (await service.book(cfg, 'call:new', {}))['reservation_status'] == 'confirmed'
+    assert fake.posts == 2
+
+
+@pytest.mark.parametrize('fault', ['active_event', 'active_invitee', 'wrong_host', 'wrong_type', 'wrong_time',
+                                  'wrong_duration', 'wrong_marker', 'rescheduled', 'wrong_invitee',
+                                  'wrong_event', 'missing_details', 'uncertain', 'not_found'])
+async def test_unproven_cancellation_never_releases_duplicate(setup, fault):
+    store, service, fake, cfg = setup
+    old = await cancelled_test(setup)
+    if fault == 'active_event': fake.event['status'] = 'active'
+    if fault == 'active_invitee': fake.invitee['status'] = 'active'
+    if fault == 'wrong_host': fake.event['event_memberships'] = [{'user': USER + '-other'}]
+    if fault == 'wrong_type': fake.event['event_type'] = TYPE + '-other'
+    if fault == 'wrong_time': fake.event['start_time'] = (datetime.fromisoformat(fake.start)+timedelta(minutes=1)).isoformat()
+    if fault == 'wrong_duration': fake.event['end_time'] = fake.start
+    if fault == 'wrong_marker': fake.invitee['tracking']['utm_content'] = 'wrong'
+    if fault == 'rescheduled': fake.invitee['rescheduled'] = True
+    if fault == 'wrong_invitee': fake.invitee['uri'] = INVITEE + '-other'
+    if fault == 'wrong_event': fake.event['uri'] = EVENT + '-other'
+    if fault in {'missing_details', 'uncertain'}:
+        row = store.attempt(old['attempt_reference'])
+        # Inject retention/recovery states directly; normal finish correctly
+        # refuses to rewrite an already settled row.
+        with store.db() as db:
+            db.execute('UPDATE attempts SET state=?,private=? WHERE id=?',
+                       ('uncertain' if fault == 'uncertain' else 'confirmed', '{}' if fault == 'missing_details' else row['private'], row['id']))
+    if fault == 'not_found':
+        original = fake.request
+        async def request(method, path, **kw):
+            if path == '/scheduled_events/booking': raise CalendlyError('upstream_404')
+            return await original(method, path, **kw)
+        fake.request = request
+    result = await service.book(cfg, 'call:new', await propose(service, fake, cfg, 'call:new'))
+    assert result['code'] == 'existing_request_needs_staff'
+    assert fake.posts == 1
+    assert store.attempt(old['attempt_reference'])['state'] != 'verified_cancelled'
+
+
+async def test_concurrent_calls_after_verified_cancellation_submit_only_once(setup):
+    store, service, fake, cfg = setup
+    await cancelled_test(setup)
+    a = await propose(service, fake, cfg, 'call:a')
+    b = await propose(service, fake, cfg, 'call:b')
+    results = await asyncio.gather(service.book(cfg, 'call:a', a), service.book(cfg, 'call:b', b))
+    assert fake.posts == 2
+    assert sum(result.get('reservation_status') == 'confirmed' for result in results) == 1
+
+
+async def test_disable_during_cancellation_readback_still_blocks_admission(setup):
+    store, service, fake, cfg = setup
+    await cancelled_test(setup)
+    params = await propose(service, fake, cfg, 'call:new')
+    original = fake.request
+    async def request(method, path, **kw):
+        result = await original(method, path, **kw)
+        if path == '/scheduled_events/booking/invitees/person':
+            store.update_connection(store.connection()['revision'], enabled=False)
+        return result
+    fake.request = request
+    with pytest.raises(CalendlyError, match='connection_changed'):
+        await service.book(cfg, 'call:new', params)
+    assert fake.posts == 1 and store.prior('call:new') is None
+
+
+async def test_spoken_weekday_uses_local_date_and_survives_sanitizer(setup):
+    _, service, fake, cfg = setup
+    # UTC Sunday is Saturday in Pacific time. Avoid a moving fixed date by
+    # selecting the next UTC Sunday, including a possible DST transition.
+    when = datetime.now(timezone.utc) + timedelta(days=8)
+    when += timedelta(days=(6-when.weekday()) % 7)
+    when = when.replace(hour=1, minute=0, second=0, microsecond=0)
+    fake.start = when.isoformat()
+    start = when - timedelta(minutes=1)
+    slots = await service.slots(cfg, 'call:date', 'consultation', start.isoformat(), (start+timedelta(days=1)).isoformat(), 'America/Los_Angeles')
+    assert slots['slots'][0]['spoken_date'].startswith('Saturday,')
+    recap = await service.book(cfg, 'call:date', {'slot_reference': slots['slots'][0]['slot_reference'], 'name': 'Test', 'email': 'test@example.com'})
+    assert recap['spoken_date'] == slots['slots'][0]['spoken_date']
+    safe = sanitize_tool_result_for_json_string(recap, tool_name='calendly_calendar')
+    assert safe['spoken_date'].startswith('Saturday,')
+
+
 async def test_concurrent_same_operation_one_post(setup):
     store, service, fake, cfg = setup
     params = await propose(service, fake, cfg)

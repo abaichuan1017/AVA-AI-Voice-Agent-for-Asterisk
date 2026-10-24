@@ -613,6 +613,9 @@ class GoogleProviderConfig(CloudConnectionConfig):
     # Qualification switch: only the actual Developer API connection uses this.
     long_audio_playback_enabled: bool = Field(default=False)
     long_audio_backlog_sec: float = Field(default=120.0, ge=10.0, le=120.0)
+    # Optional per-response reserve for bursty Google audio. Short responses
+    # flush at generation/turn completion; interruption discards the reserve.
+    playback_prefill_ms: int = Field(default=0, ge=0, le=3000)
     vertex_project: Optional[str] = None  # GCP project ID (GOOGLE_CLOUD_PROJECT)
     vertex_location: str = Field(default="us-central1")  # GCP region (GOOGLE_CLOUD_LOCATION)
 

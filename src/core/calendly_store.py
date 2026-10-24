@@ -190,10 +190,28 @@ class CalendlyStore:
             row = db.execute("SELECT * FROM attempts WHERE operation=? AND state NOT IN ('rejected','aborted_before_submit') ORDER BY created DESC LIMIT 1", (operation,)).fetchone()
             return dict(row) if row else None
 
+    @staticmethod
+    def duplicate_key(conn: dict, payload: dict) -> str:
+        return digest([conn["user"], conn["organization"], payload["event_type"], payload["start_time"], payload["invitee"]["email"]])
+
+    def duplicate(self, operation: str, conn: dict, payload: dict) -> dict | None:
+        with self.db() as db:
+            row = db.execute("SELECT * FROM attempts WHERE duplicate_key=? AND operation!=? AND state NOT IN ('rejected','aborted_before_submit','verified_cancelled') ORDER BY created DESC LIMIT 1",
+                             (self.duplicate_key(conn, payload), operation)).fetchone()
+            return dict(row) if row else None
+
+    def release_cancelled_duplicate(self, row: dict) -> bool:
+        # Called only after positive exact event AND invitee cancellation proof.
+        # CAS preserves concurrent reconciliation/operator changes. Keep the row
+        # as the original operation's replay barrier, including after retention.
+        with self.db() as db:
+            return bool(db.execute("UPDATE attempts SET state='verified_cancelled',updated=? WHERE id=? AND state=? AND private=? AND connection_id=? AND state IN ('confirmed','resolved_remote_cancelled')",
+                                   (time.time(), row["id"], row["state"], row["private"], row["connection_id"])).rowcount)
+
     def admit(self, operation: str, conn: dict, payload: dict, public: dict) -> tuple[dict, bool]:
         now = time.time()
         fingerprint = digest(payload)
-        duplicate = digest([conn["user"], conn["organization"], payload["event_type"], payload["start_time"], payload["invitee"]["email"]])
+        duplicate = self.duplicate_key(conn, payload)
         with self.db() as db:
             db.execute("BEGIN IMMEDIATE")
             current = json.loads(db.execute("SELECT value FROM connection WHERE id=1").fetchone()[0])
@@ -201,7 +219,7 @@ class CalendlyStore:
                 raise CalendlyError("connection_changed")
             if current.get("cooldown", 0) > now:
                 raise CalendlyError("rate_limited")
-            existing = db.execute("SELECT * FROM attempts WHERE (operation=? OR duplicate_key=?) AND state NOT IN ('rejected','aborted_before_submit') ORDER BY created DESC LIMIT 1", (operation, duplicate)).fetchone()
+            existing = db.execute("SELECT * FROM attempts WHERE (operation=? OR (duplicate_key=? AND state!='verified_cancelled')) AND state NOT IN ('rejected','aborted_before_submit') ORDER BY created DESC LIMIT 1", (operation, duplicate)).fetchone()
             if existing:
                 return dict(existing), False
             if db.execute("SELECT 1 FROM attempts WHERE state='submitting' AND lease>?", (now,)).fetchone():

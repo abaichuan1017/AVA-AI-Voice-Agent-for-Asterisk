@@ -36,6 +36,7 @@ def view(row: dict, operation: str | None = None) -> dict:
             "reservation_status": state, "attempt_reference": row["id"],
             "message": {"confirmed": "Appointment booked. Calendly handles its configured confirmation.",
                         "resolved_remote_cancelled": "The appointment was created and has since been cancelled; staff can assist.",
+                        "verified_cancelled": "The original appointment was verified cancelled. This request cannot book it again; start a new call for a new appointment.",
                         "rejected": "The booking was rejected. Confirm corrected details before another attempt.",
                         "resolved_externally": "Staff recorded handling this request outside AVA."}.get(state, "Confirmation is pending. Do not book again; ask staff to verify.")}
 
@@ -164,6 +165,7 @@ class CalendlyService:
             ref = await asyncio.to_thread(self.store.proposal, operation, conn["id"],
                                           {"appointment": entry, "key": key, "start": when.isoformat(), "timezone": tz, "revision": conn["revision"], "setup": setup})
             output.append({"slot_reference": ref, "start_datetime": when.astimezone(ZoneInfo(tz)).isoformat(),
+                           "spoken_date": when.astimezone(ZoneInfo(tz)).strftime("%A, %B %d, %Y"),
                            "end_datetime": (when + timedelta(minutes=entry["duration"])).astimezone(ZoneInfo(tz)).isoformat()})
         return {"status": "success", "appointment_key": key, "appointment_name": entry["name"], "duration_minutes": entry["duration"],
                 "timezone": tz, "location_summary": location_label(entry["location_summary"]), "questions": entry["questions"],
@@ -214,6 +216,8 @@ class CalendlyService:
                   "end_datetime": (when + timedelta(minutes=entry["duration"])).astimezone(ZoneInfo(proposal["timezone"])).isoformat(),
                   "timezone": proposal["timezone"], "duration_minutes": entry["duration"],
                   "location_summary": location_label(entry["location_summary"])}
+        local_start = when.astimezone(ZoneInfo(proposal["timezone"]))
+        public["spoken_date"] = local_start.strftime("%A, %B %d, %Y")
         if not proposal.get("setup"):
             # Booleans from the model alone must not skip a canonical readback.
             # Reuse expiring, call/connection-bound proposals; persist only a
@@ -225,20 +229,27 @@ class CalendlyService:
                 spelling = " ".join({".": "dot", "_": "underscore", "-": "hyphen", "+": "plus", "@": "at"}.get(c, c) for c in recipient)
                 return {**public, "status": "confirmation_required", "confirmation_reference": reference,
                         "confirmation_recap": {"name": name.strip(), "email": recipient, "email_spelling": spelling},
-                        "message": "Nothing is booked. Spell the exact email including every dot and symbol, read the complete appointment recap, then ask for approval. Only after the caller approves this recap, call create_booking with the same details, this confirmation_reference and both confirmation flags true. A correction requires a new recap without a confirmation_reference."}
+                        "message": "Nothing is booked. Use spoken_date for the local weekday/date, never calculate it yourself. Spell the exact email including every dot and symbol, read the complete appointment recap, then ask for approval. Only after the caller approves this recap, call create_booking with the same details, this confirmation_reference and both confirmation flags true. A correction requires a new recap without a confirmation_reference."}
             confirmation = await asyncio.to_thread(self.store.read_proposal, reference, operation, conn["id"])
             if confirmation.get("confirmation_digest") != fingerprint:
                 raise CalendlyError("confirmation_changed_reconfirm")
             if params.get("booking_confirmed") is not True or params.get("email_confirmed") is not True:
                 raise CalendlyError("confirmation_required")
-        slots = await client.request("GET", "/event_type_available_times", params={"event_type": entry["uri"], "start_time": when.isoformat(), "end_time": (when + timedelta(minutes=entry["duration"])).isoformat()})
-        if not any(instant(s.get("start_time", "")) == when and s.get("status") == "available" and s.get("invitees_remaining") == 1 for s in slots.get("collection", [])):
-            raise CalendlyError("slot_no_longer_available")
         payload = {"event_type": entry["uri"], "start_time": when.isoformat(),
                    "invitee": {"name": name.strip(), "email": recipient, "timezone": proposal["timezone"]},
                    "questions_and_answers": questions}
         if entry["location"]:
             payload["location"] = entry["location"]
+        # This is still read-only preflight. Never release an uncertain request,
+        # infer cancellation from availability/404, or replay the original call.
+        # At most two historical duplicates/four exact GETs fit this operation.
+        for _ in range(2):
+            duplicate = await asyncio.to_thread(self.store.duplicate, operation, conn, payload)
+            if not duplicate or not await self.verify_cancelled_duplicate(duplicate, conn, client):
+                break
+        slots = await client.request("GET", "/event_type_available_times", params={"event_type": entry["uri"], "start_time": when.isoformat(), "end_time": (when + timedelta(minutes=entry["duration"])).isoformat()})
+        if not any(instant(s.get("start_time", "")) == when and s.get("status") == "available" and s.get("invitees_remaining") == 1 for s in slots.get("collection", [])):
+            raise CalendlyError("slot_no_longer_available")
         if admission_check:
             await admission_check()
         if deadline - time.monotonic() < 7:
@@ -273,6 +284,31 @@ class CalendlyService:
             await asyncio.shield(asyncio.to_thread(self.store.finish, row["id"], "uncertain", public, private))
             raise
         return view(await asyncio.to_thread(self.store.attempt, row["id"]), operation)
+
+    async def verify_cancelled_duplicate(self, row, conn, client) -> bool:
+        if row["state"] not in {"confirmed", "resolved_remote_cancelled"} or row["connection_id"] != conn["id"]:
+            return False
+        private = json.loads(row["private"])
+        lookup = private.get("lookup") or {}
+        if (private.get("user") != conn["user"] or private.get("organization") != conn["organization"]
+                or not private.get("event") or not private.get("invitee") or not lookup):
+            return False
+        try:
+            event = (await client.request("GET", resource_path(private["event"], "scheduled_events"))).get("resource") or {}
+            invitee = (await client.request("GET", resource_path(private["invitee"], "scheduled_events"))).get("resource") or {}
+            self.validate_invitee(invitee, lookup, row["marker"])
+            if (event.get("uri") != private["event"] or invitee.get("uri") != private["invitee"]
+                    or invitee.get("event") != event.get("uri") or invitee.get("rescheduled")
+                    or not invitee["uri"].startswith(event["uri"] + "/invitees/")
+                    or event.get("status") != "canceled" or invitee.get("status") != "canceled"
+                    or event.get("event_type") != lookup["event_type"]
+                    or instant(event.get("start_time", "")) != instant(lookup["start"])
+                    or (instant(event.get("end_time", "")) - instant(event["start_time"])).total_seconds() != lookup["duration"] * 60
+                    or not any(m.get("user") == conn["user"] for m in event.get("event_memberships", []))):
+                return False
+        except (CalendlyError, KeyError, TypeError):
+            return False
+        return await asyncio.to_thread(self.store.release_cancelled_duplicate, row)
 
     @staticmethod
     def validate_invitee(invitee, lookup, marker):

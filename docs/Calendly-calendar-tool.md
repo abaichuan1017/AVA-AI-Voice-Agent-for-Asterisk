@@ -24,6 +24,8 @@ The agent asks for purpose, timezone, name, exact invitation email, and required
 
 At most one confirmed or uncertain booking operation is permitted per call. Repeated tool calls return the retained original result. They do not change its time or recipient. Later changes, including requests made in the same conversation after booking, use Calendly's confirmation link or staff. An error checking availability is not a busy slot. Booking success is not proof of delivered email or accepted RSVP.
 
+If a new call selects the same appointment, time and recipient as an earlier canceled booking, AVA may release that cross-call duplicate barrier only after exact event and invitee reads both prove cancellation and match the saved host, appointment, time, duration, recipient and tracking marker. Missing data, active/uncertain/rescheduled records, mismatches, 404s and read failures keep it blocked for staff. The original operation remains a replay barrier; no history is deleted. Fresh availability, final approval, active-call and connection checks still precede the single booking POST. Recaps carry a server-computed `spoken_date` so the local weekday agrees with the date.
+
 ## Pending submissions
 
 AVA commits its submission journal before one booking POST. It never automatically repeats a POST after a lost response, timeout, server error, cancellation, or process restart.

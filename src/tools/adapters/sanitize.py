@@ -159,7 +159,7 @@ def sanitize_tool_result_for_json_string(
     elif normalized_tool_name in CALENDAR_TOOL_NAMES:
         selected_keep_keys = TOOL_CALENDAR_KEYS
         if normalized_tool_name == "calendly_calendar":
-            selected_keep_keys += ("confirmation_reference", "confirmation_recap")
+            selected_keep_keys += ("confirmation_reference", "confirmation_recap", "spoken_date")
 
     if isinstance(result, dict) and result.get("internal_notification"):
         selected_keep_keys = tuple(dict.fromkeys((*selected_keep_keys,
