@@ -116,3 +116,19 @@ async def test_private_links_only_on_authenticated_details(api):
         assert detail["cancel_url"] == "https://calendly.com/cancellations/private"
         assert "reschedule_url" not in detail
         assert (await client.post(f'/api/calendly/attempts/{row["id"]}/external-resolution', json={"note": "test"})).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_setup_confirmation_reference_as_slot_returns_correctable_error_without_post(api):
+    app, store, headers = api
+    conn = store.save_connection(IDENTITY, 'synthetic', 0)
+    store.update_connection(conn['revision'], enabled=True)
+    operation = 'setup:00000000-0000-4000-8000-000000000000'
+    reference = store.proposal(operation, conn['id'], {'confirmation_digest': 'not-a-slot'})
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test', headers=headers) as client:
+        response = await client.post('/api/calendly/test-bookings', json={
+            'operation': operation, 'slot_reference': reference, 'name': 'Test', 'email': 'test@example.com',
+            'booking_confirmed': True, 'email_confirmed': True})
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'proposal_expired'
+    assert store.prior(operation) is None

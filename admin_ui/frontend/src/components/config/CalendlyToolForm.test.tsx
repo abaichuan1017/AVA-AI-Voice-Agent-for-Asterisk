@@ -126,3 +126,53 @@ describe('Calendly guided setup', () => {
         expect(vi.mocked(axios.request).mock.calls.filter(([r]) => r.url?.endsWith('/test-bookings'))).toHaveLength(1);
     });
 });
+
+it('keeps setup operations separate across appointments and remount, and cleans only the selected operation', async () => {
+    mock();
+    const original = vi.mocked(axios.request).getMockImplementation()!;
+    vi.mocked(axios.request).mockImplementation(async r => {
+        const response = await original(r);
+        if (r.url?.endsWith('/test-proposals')) response.data.operation = (r.data as { operation: string }).operation;
+        if (r.url?.endsWith('/test-bookings')) response.data = { status: 'success', reservation_status: 'confirmed', message: 'Appointment booked', attempt_reference: 'attempt' };
+        if (r.url?.endsWith('/attempts')) response.data = ['attempt', 'unrelated'].map(id => ({ id, state: 'confirmed', updated: 1 }));
+        if (r.url?.includes('/attempts/')) response.data = { status: 'success', reservation_status: 'confirmed', message: 'Appointment booked', attempt_reference: r.url.split('/').pop() };
+        return response;
+    });
+    const a = `calendly.setup.${connection.id}.demo`;
+    const b = `calendly.setup.${connection.id}.other`;
+    sessionStorage.setItem(a, 'setup:appointment-a');
+    sessionStorage.setItem(b, 'setup:appointment-b');
+    const props = { config: { appointments: { demo: binding, other: { ...binding, name: 'Other' } } }, onChange: vi.fn(), onSave: vi.fn() };
+    const first = render(<CalendlyToolForm {...props} />);
+    await screen.findByText(/Alex · UTC/);
+    await userEvent.selectOptions(screen.getByLabelText('Appointment'), 'demo');
+    await userEvent.click(screen.getByRole('button', { name: 'Find test times' }));
+    await screen.findByLabelText('Available time');
+    await userEvent.selectOptions(screen.getByLabelText('Appointment'), 'other');
+    await userEvent.click(screen.getByRole('button', { name: 'Find test times' }));
+    await screen.findByLabelText('Available time');
+    first.unmount();
+    render(<CalendlyToolForm {...props} />);
+    await screen.findByText(/Alex · UTC/);
+    await userEvent.selectOptions(screen.getByLabelText('Appointment'), 'demo');
+    await userEvent.click(screen.getByRole('button', { name: 'Find test times' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Available time'), 'slot-ref');
+    expect(vi.mocked(axios.request).mock.calls.filter(([r]) => r.url?.endsWith('/test-proposals')).map(([r]) => (r.data as { operation: string }).operation))
+        .toEqual(['setup:appointment-a', 'setup:appointment-b', 'setup:appointment-a']);
+    await userEvent.type(screen.getByLabelText('Test invitee name'), 'Test');
+    await userEvent.type(screen.getByLabelText('Test recipient email'), 'test@example.com');
+    await userEvent.click(screen.getByLabelText(/I approve these details/));
+    await userEvent.click(screen.getByRole('button', { name: 'Create test booking and send invitation' }));
+    await screen.findByText(/Appointment booked/);
+    await userEvent.click(screen.getByLabelText(/I cleaned up the test appointment/));
+    await userEvent.click(screen.getAllByRole('button', { name: 'Inspect result' })[1]);
+    expect(screen.getByLabelText(/I cleaned up the test appointment/)).not.toBeChecked();
+    await userEvent.click(screen.getByLabelText(/I cleaned up the test appointment/));
+    expect(screen.queryByRole('button', { name: 'Start another setup test after cleanup' })).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(a)).toBe('setup:appointment-a');
+    await userEvent.click(screen.getAllByRole('button', { name: 'Inspect result' })[0]);
+    await userEvent.click(screen.getByLabelText(/I cleaned up the test appointment/));
+    await userEvent.click(screen.getByRole('button', { name: 'Start another setup test after cleanup' }));
+    expect(sessionStorage.getItem(a)).toBeNull();
+    expect(sessionStorage.getItem(b)).toBe('setup:appointment-b');
+});

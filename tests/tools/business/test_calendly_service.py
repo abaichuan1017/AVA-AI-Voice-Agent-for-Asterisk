@@ -732,3 +732,59 @@ async def test_next_availability_sorts_before_limiting_and_honors_window(setup):
     result = await service.slots(cfg, 'call:earliest', 'consultation', start.isoformat(), end.isoformat(), 'America/Los_Angeles')
     assert [datetime.fromisoformat(row['start_datetime']).astimezone(timezone.utc) for row in result['slots']] == [start+timedelta(hours=i) for i in range(1, 11)]
     assert result['slots_truncated'] is True and fake.posts == 0
+
+
+@pytest.mark.parametrize('setup_mode', [False, True])
+async def test_confirmation_reference_as_slot_is_correctable_before_admission(setup, setup_mode):
+    store, service, fake, cfg = setup
+    operation = 'setup:one' if setup_mode else 'call:one'
+    ref = store.proposal(operation, store.connection()['id'], {'confirmation_digest': 'not-a-slot'})
+    with pytest.raises(CalendlyError, match='proposal_expired'):
+        await service.book(cfg, operation, {'slot_reference': ref})
+    assert fake.posts == 0 and store.prior(operation) is None
+
+
+@pytest.mark.parametrize('fault', ['cleanup', 'history_setup', 'purge', 'due', 'reconcile', 'cancel'])
+async def test_recovery_failures_are_isolated_and_cancellation_propagates(tmp_path, monkeypatch, fault, caplog):
+    from types import SimpleNamespace
+    from src.tools.business import calendly_service as module
+    from src.core import call_history
+    journal = tmp_path / 'db'; journal.touch()
+    history = tmp_path / 'history'; history.touch()
+    monkeypatch.setenv('CALENDLY_DB_PATH', str(journal))
+    monkeypatch.setenv('CALL_HISTORY_DB_PATH', str(history))
+    calls = []
+    passes = 0
+    def fail(): raise sqlite3.OperationalError('private diagnostic test@example.com')
+    def cleanup():
+        calls.append('cleanup')
+        if fault == 'cleanup': fail()
+    def due_keys():
+        calls.append('due')
+        if fault == 'due' and passes == 0: fail()
+        return ['bad', 'good']
+    async def purge():
+        calls.append('purge')
+        if fault == 'purge': fail()
+    def get_history():
+        calls.append('history')
+        if fault == 'history_setup': fail()
+        return SimpleNamespace(retry_pending_calendly_purges=purge)
+    async def reconcile(key):
+        calls.append(key)
+        if key == 'bad' and fault == 'reconcile': fail()
+        if key == 'bad' and fault == 'cancel': raise asyncio.CancelledError()
+    async def stop(_):
+        nonlocal passes
+        passes += 1
+        if fault != 'due' or passes == 2: raise asyncio.CancelledError()
+    store = SimpleNamespace(cleanup=cleanup, due=due_keys)
+    monkeypatch.setattr(module, 'CalendlyStore', lambda: store)
+    monkeypatch.setattr(module, 'CalendlyService', lambda _: SimpleNamespace(reconcile=reconcile))
+    monkeypatch.setattr(call_history, 'get_call_history_store', get_history)
+    monkeypatch.setattr(module.asyncio, 'sleep', stop)
+    with pytest.raises(asyncio.CancelledError): await module.recovery_loop()
+    if fault == 'cancel': assert 'good' not in calls and passes == 0
+    else: assert calls[-2:] == ['bad', 'good']
+    if fault == 'due': assert calls.count('due') == 2
+    assert 'private diagnostic' not in caplog.text and 'test@example.com' not in caplog.text

@@ -294,14 +294,19 @@ class CalendlyStore:
             db.commit()
 
     def cleanup(self, purged_calls: list[str] | None = None):
-        days = int(os.getenv("CALL_HISTORY_RETENTION_DAYS", "0"))
+        try:
+            days = int((os.getenv("CALL_HISTORY_RETENTION_DAYS") or "0").strip())
+        except ValueError:
+            days = 0
         days = min(30, days) if days > 0 else 30
         cutoff = time.time() - days * 86400
         with self.db() as db:
             db.execute("DELETE FROM proposals WHERE expires<?", (time.time(),))
             db.execute("UPDATE attempts SET private='{}',public='{}' WHERE created<? AND (private!='{}' OR public!='{}')", (cutoff,))
+            db.execute("UPDATE resolutions SET note='' WHERE note!='' AND attempt_id IN (SELECT id FROM attempts WHERE created<?)", (cutoff,))
             for call in purged_calls or []:
                 db.execute("UPDATE attempts SET private='{}',public='{}' WHERE operation=? AND (private!='{}' OR public!='{}')", ("call:" + call,))
+                db.execute("UPDATE resolutions SET note='' WHERE note!='' AND attempt_id IN (SELECT id FROM attempts WHERE operation=?)", ("call:" + call,))
 
 
 def scrub_deleted_calls(call_ids: list[str]) -> bool:

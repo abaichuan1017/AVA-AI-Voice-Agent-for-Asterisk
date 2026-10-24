@@ -181,6 +181,8 @@ class CalendlyService:
         if prior:
             return view(prior, operation)
         proposal = await asyncio.to_thread(self.store.read_proposal, params.get("slot_reference", ""), operation, conn["id"])
+        if not isinstance(proposal, dict) or not {"key", "appointment", "start", "timezone", "revision"} <= proposal.keys():
+            raise CalendlyError("proposal_expired")
         key = proposal["key"]
         entry = await self.current(cfg, key, conn, client, setup=bool(proposal.get("setup")))
         if proposal["revision"] != conn["revision"] or digest(entry) != digest(proposal["appointment"]):
@@ -431,8 +433,10 @@ class CalendlyService:
 
 async def recovery_loop():
     """Only touch an already-created journal; disabled installations stay inert."""
+    import logging
     import os
     from pathlib import Path
+    log = logging.getLogger(__name__)
     last_cleanup = None
     while True:
         try:
@@ -440,18 +444,39 @@ async def recovery_loop():
             if path.exists():
                 store = await asyncio.to_thread(CalendlyStore)
                 if last_cleanup is None or time.monotonic() - last_cleanup >= 60:
-                    await asyncio.to_thread(store.cleanup)
-                    last_cleanup = time.monotonic()
+                    try:
+                        await asyncio.to_thread(store.cleanup)
+                        last_cleanup = time.monotonic()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        log.warning("Calendly cleanup failed (%s); reconciliation continues", type(exc).__name__)
                 if Path(os.getenv("CALL_HISTORY_DB_PATH", "/app/data/call_history.db")).exists():
-                    from src.core.call_history import get_call_history_store
-                    await get_call_history_store().retry_pending_calendly_purges()
+                    try:
+                        from src.core.call_history import get_call_history_store
+                        await get_call_history_store().retry_pending_calendly_purges()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        log.warning("Calendly purge retry failed (%s); reconciliation continues", type(exc).__name__)
                 service = CalendlyService(store)
-                for key in await asyncio.to_thread(store.due):
-                    await service.reconcile(key)
+                try:
+                    keys = await asyncio.to_thread(store.due)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.warning("Calendly due lookup failed (%s)", type(exc).__name__)
+                    keys = []
+                for key in keys:
+                    try:
+                        await service.reconcile(key)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        log.warning("Calendly reconciliation failed (%s); other attempts continue", type(exc).__name__)
         except asyncio.CancelledError:
             raise
         except Exception:
             # Journaling failures must not take down the telephony runtime.
-            import logging
-            logging.getLogger(__name__).warning("Calendly recovery unavailable; scheduling remains fail-closed")
+            log.warning("Calendly recovery unavailable; scheduling remains fail-closed")
         await asyncio.sleep(5)

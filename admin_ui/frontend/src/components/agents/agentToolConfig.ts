@@ -208,7 +208,7 @@ export function serializeAgentConfig(state: AgentToolState): SerializedAgentConf
     else delete extra['no_input'];
 
     const toolConfigs: Record<string, unknown> = {};
-    if (state.calendlyPolicy && state.calendlyPolicy !== 'inherit' && (state.inCallTools.includes('calendly_calendar') || state.calendlyKeys.length || state.calendlyPolicy !== 'selected')) {
+    if (state.calendlyPolicy && state.calendlyPolicy !== 'inherit') {
         toolConfigs.calendly_calendar = {
             appointment_policy: state.calendlyPolicy,
             appointment_keys: state.calendlyPolicy === 'selected' ? [...new Set(state.calendlyKeys)] : [],

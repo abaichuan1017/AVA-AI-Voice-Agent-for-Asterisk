@@ -304,7 +304,10 @@ class CallHistoryStore:
             "CALL_HISTORY_DB_PATH", 
             "/app/data/call_history.db"
         )
-        self._retention_days = int(os.getenv("CALL_HISTORY_RETENTION_DAYS", "0"))
+        try:
+            self._retention_days = int((os.getenv("CALL_HISTORY_RETENTION_DAYS") or "0").strip())
+        except ValueError:
+            self._retention_days = 0
         self._enabled = os.getenv("CALL_HISTORY_ENABLED", "true").lower() in ("true", "1", "yes")
         self._lock = threading.Lock()
         self._initialized = False
@@ -1095,7 +1098,7 @@ class CallHistoryStore:
                     return
                 from src.core.calendly_store import scrub_deleted_calls
                 if not scrub_deleted_calls(calls):
-                    logger.warning("Calendly erasure deferred; journal absent and retry retained")
+                    logger.debug("Calendly erasure deferred; journal absent and retry retained")
                     return
                 with self._lock:
                     conn = self._get_connection()
@@ -1104,8 +1107,8 @@ class CallHistoryStore:
                         conn.commit()
                     finally:
                         conn.close()
-            except Exception:
-                logger.warning("Calendly erasure deferred; history deletion completed and retry retained")
+            except Exception as exc:  # noqa: BLE001 - erasure retry must not fail history deletion
+                logger.warning("Calendly erasure deferred (%s); history deletion completed and retry retained", type(exc).__name__)
 
         await asyncio.get_running_loop().run_in_executor(None, _retry_sync)
     

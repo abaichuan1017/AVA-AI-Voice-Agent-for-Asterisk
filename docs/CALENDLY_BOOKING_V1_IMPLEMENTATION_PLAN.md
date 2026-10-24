@@ -1,6 +1,6 @@
 # Calendly booking v1 implementation plan
 
-Status: implemented and deployed; PR #774 is in final readiness review. The supported Google Live/Google Meet booking slice and corrected farewell lifecycle have passed real-call checks. Further review corrections passed local tests and deployed isolated smoke/UI checks; the final CI/review gate remains pending. No merge has been performed.
+Status: implemented and deployed; PR #774 is in final readiness review. The supported Google Live/Google Meet booking slice and corrected farewell lifecycle have passed real-call checks. The latest review corrections passed local regression tests; updated deployment and the final CI/review gate remain pending. No merge has been performed.
 
 Prepared October 23, 2026 after API/schema research and repository inspection; updated October 24 with implementation, failure-path tests, setup qualification, real booking and farewell evidence. This replaces the earlier broad calendar-management vision with one operator-owned Calendly connection and in-call appointment booking. OAuth, calendar administration and a general booking-management application remain deferred.
 
@@ -8,9 +8,9 @@ Prepared October 23, 2026 after API/schema research and repository inspection; u
 
 - The complete operator flow includes protected PAT verification/save, supported appointment discovery and selection, per-agent permissions, explicit setup qualification, native availability/recap/approval/booking, Call History outcomes and bounded pending-request recovery.
 - Reliability uses durable one-POST admission, exact call/connection-bound proposals, unchanged canonical recaps, duplicate/replay barriers, positive bounded reconciliation and staff fallback. A reference-only final approval can reuse only the validated active-call details; it never inherits approval flags. Exact event and invitee cancellation can release a cross-operation duplicate while retaining the original operation barrier.
-- Review corrections cover async UI draft preservation, visible request references, consistent null/empty selection, malformed readback escalation, ordered/interruption-safe Google audio, and durable linked-data erasure. A missing journal must retain erasure work; disabling new Call History collection must not revoke an existing erasure obligation.
+- Review corrections cover async UI draft preservation, visible request references, consistent null/empty selection, malformed readback escalation, ordered/interruption-safe Google audio, and durable linked-data erasure. A missing journal must retain erasure work; disabling new Call History collection must not revoke an existing erasure obligation. Explicit empty Agent permissions survive tool disable/re-enable; setup operations are scoped to the selected appointment and result; private resolution notes share detail-erasure rules. Invalid retention configuration cannot block cleanup, and failure of cleanup, history setup or one attempt must not skip other reconciliation work. Queued erasure obligations remain until a successful scrub, with bounded processing rather than silent expiry.
 - The optional Google audio reserve defaults to zero in shipped configuration. The development pilot uses 2000 ms to absorb observed bursty recaps. Synthetic arrival-trace tests preserve byte order; interruption, completion, stale response and teardown tests cover the lifecycle. Partial real frames are padded and paced after the empty-filler idle cutoff, preserving terminal drain safeguards.
-- Last completed local full validation: 3,663 core tests passed, three skipped, 176 CI exclusions, 59.79% coverage; 982 backend tests and 517 frontend tests passed. Lint/build and committed-secret/diff checks passed. The full CI gate, CodeQL and image-size budgets passed before the latest review batch; final results must match the final PR head.
+- Last completed local full validation: 3,685 core tests passed, three skipped, 176 CI exclusions, 59.84% coverage; 983 backend tests and 519 frontend tests passed. Lint/build and committed-secret/diff checks passed. The full CI gate, CodeQL and image-size budgets passed before the latest review batch; final results must match the final PR head.
 - Both affected images were rebuilt and services recreated behind idle/paused gates, retaining operator configuration, credentials and data. All eight providers became ready; ARI/AudioSocket connected, migrations initialized, and post-ready logs had no error/critical events. Deployed synthetic confirmation and partial-tail smoke checks performed no external booking writes. Rebuilt UI checks confirmed paused scheduling, matching request references and the inherited Agent appointment-policy default. The latest isolated deployed smoke also preserved queued erasure across an absent journal and disabled history collection, retained replay barriers, discarded stale audio suspended in latency tracking, and preserved new-response bytes. It made no real history changes or external writes.
 
 ## Live-qualified configuration and evidence
@@ -60,7 +60,7 @@ References and expandable request/response schemas were checked October 23, 2026
 | Event metadata includes questions, duration, owner, locations, and scheduling configuration | Classify support from actual metadata and reject unknown required configurations | [Get Event Type](https://developer.calendly.com/api-docs/calendly-api/event-types/get-event-type) |
 | Paid non-Enterprise booking limits are 10 requests/minute, 50/hour, 100/day per user; trial limit is 5/day | Handle quota explicitly; other integrations share upstream per-user limits. Avoid unnecessary test bookings | [Rate limits](https://developer.calendly.com/api-docs/overview/rate-limits) |
 | Cancel/reschedule links are available on invitees and included in Calendly calendar events/email confirmations; no direct rescheduling endpoint is documented | Direct callers to their confirmation; expose authenticated operator links without adding management mutations | [FAQ](https://developer.calendly.com/docs/getting-started/frequently-asked-questions) |
-| The reviewed booking reference documents no idempotency-key guarantee | A local journal prevents AVA resubmission; it cannot make an ambiguous remote write safe to retry |
+| The reviewed booking reference documents no idempotency-key guarantee | A local journal prevents AVA resubmission; it cannot make an ambiguous remote write safe to retry | [Create Event Invitee](https://developer.calendly.com/api-docs/calendly-api/scheduled-events/create-event-invitee) |
 
 ### 2.1 Authentication and scope decision
 
@@ -361,17 +361,17 @@ Use synthetic fixtures, mocked HTTP transports, temporary databases/secret files
 | Provider and regression | Native tool schema and structured output through OpenAI GA/Beta, Google Live, Deepgram, ElevenLabs and supported tool-capable pipelines as applicable; correct function/action naming; no loss of slot arrays/status; no technical acknowledgements spoken; existing calendars, transfer, hangup, metadata and audit behavior retained |
 | Persistence/privacy deadlines | FULL journal synchronization requested; 1-second busy bound; 15-second internal service deadline even with adapters lacking a wrapper; credential file and directory fsync failures; 30-day-or-shorter detail retention; Call History purge independent of tombstones; expired recovery details; restored-backup admission disabled |
 
-Planned new test files include `tests/tools/business/test_calendly_client.py`, `test_calendly_service.py`, `test_calendly_calendar_tool.py`, `tests/test_calendly_store.py`, `admin_ui/backend/tests/test_calendly_endpoints.py`, and colocated frontend component tests. Extend existing policy, reload, sanitizer, adapter, and Agent config tests where they already assert shared behavior.
+Implemented test suites include `tests/tools/business/test_calendly_client.py`, `test_calendly_service.py`, `tests/test_calendly_store.py`, `admin_ui/backend/tests/test_calendly_endpoints.py`, and colocated frontend component tests. Extend existing policy, reload, sanitizer, adapter, and Agent config tests where they already assert shared behavior.
 
-Suggested commands once implementation exists (run in the stated directory, following current CI dependency setup):
+Verification commands (run in the stated directory, following current CI dependency setup):
 
 ```bash
 # Repository root: focused new tests plus shared runtime regressions.
-python -m pytest tests/tools/business/test_calendly_client.py tests/tools/business/test_calendly_service.py tests/tools/business/test_calendly_calendar_tool.py tests/test_calendly_store.py tests/tools/test_runtime_config_v740.py tests/test_tool_reload_v740.py tests/test_tool_runtime_guidance.py tests/test_tool_adapter_allowlist.py -q
+python -m pytest tests/tools/business/test_calendly_client.py tests/tools/business/test_calendly_service.py tests/test_calendly_store.py tests/tools/test_runtime_config_v740.py tests/test_tool_reload_v740.py tests/test_tool_runtime_guidance.py tests/test_tool_adapter_allowlist.py -q
 
 # admin_ui/backend: endpoint tests first, then the backend suite.
-PYTHONPATH=. python -m pytest tests/test_calendly_endpoints.py -q
-PYTHONPATH=. python -m pytest tests -q
+PYTHONPATH=../.. python -m pytest tests/test_calendly_endpoints.py -q
+PYTHONPATH=../.. python -m pytest tests -q
 
 # admin_ui/frontend: focused components during development, then release checks.
 npm test

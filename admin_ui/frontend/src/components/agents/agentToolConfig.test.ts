@@ -10,6 +10,18 @@ describe('Calendly appointment policy matches runtime defaults', () => {
         expect(parseAgentConfig(serializeAgentConfig(state)).calendlyPolicy).toBe('inherit');
     });
 
+    it('keeps selected-empty access across tool disable, save, reopen and re-enable', () => {
+        const state = parseAgentConfig({ tools_json: JSON.stringify(['calendly_calendar']),
+            tool_configs_json: JSON.stringify({ calendly_calendar: { appointment_policy: 'selected', appointment_keys: [] } }) });
+        state.inCallTools = [];
+        const reopened = parseAgentConfig(serializeAgentConfig(state));
+        expect(reopened.calendlyPolicy).toBe('selected');
+        reopened.inCallTools = ['calendly_calendar'];
+        const enabled = parseAgentConfig(serializeAgentConfig(reopened));
+        expect(enabled.calendlyPolicy).toBe('selected');
+        expect(enabled.calendlyKeys).toEqual([]);
+    });
+
     it.each(['none', 'selected'])('preserves explicit %s denial instead of inheriting', policy => {
         const state = parseAgentConfig({ tools_json: JSON.stringify(['calendly_calendar']),
             tool_configs_json: JSON.stringify({ calendly_calendar: { appointment_policy: policy, appointment_keys: [] } }) });

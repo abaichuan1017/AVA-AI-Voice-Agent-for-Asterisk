@@ -33,6 +33,7 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
     const [answers, setAnswers] = useState<Record<number, string>>({});
     const [approved, setApproved] = useState(false);
     const [result, setResult] = useState<Result | null>(null);
+    const [setupAttempt, setSetupAttempt] = useState('');
     const [attempts, setAttempts] = useState<Attempt[]>([]);
     const [resolutionNote, setResolutionNote] = useState('');
     const [invitationChecked, setInvitationChecked] = useState(false);
@@ -52,6 +53,7 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
         return () => { alive = false; };
     }, [token]);
     useEffect(() => { setApproved(false); }, [slot, name, recipient, answers, tz, testKey]);
+    useEffect(() => { setInvitationChecked(false); setCalendarChecked(false); setCleanupChecked(false); }, [result?.attempt_reference]);
     const run = async (work: () => Promise<void>, fallback = 'This action could not be confirmed. Refresh status before repeating a booking.') => {
         if (busy) return;
         setBusy(true); setError(''); setNotice('');
@@ -114,11 +116,11 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
         {connection.id && <fieldset disabled={busy} className="space-y-4 min-w-0">
             <legend className="text-lg font-medium">3. Test setup</legend>
             <p className="text-sm">This creates a real appointment and sends Calendly’s configured invitation. Use your own disposable test recipient. Save and apply selection first; verify conflict calendars and destination calendar in Calendly.</p>
-            <label className="block text-sm">Appointment<select className={input} value={testKey} onChange={e => { setTestKey(e.target.value); setProposal(null); setResult(null); }}><option value="">Choose an appointment</option>{Object.entries(selected).map(([key, v]) => <option key={key} value={key}>{v.name}</option>)}</select></label>
+            <label className="block text-sm">Appointment<select className={input} value={testKey} onChange={e => { setTestKey(e.target.value); setProposal(null); setResult(null); setSetupAttempt(''); }}><option value="">Choose an appointment</option>{Object.entries(selected).map(([key, v]) => <option key={key} value={key}>{v.name}</option>)}</select></label>
             <label className="block text-sm">Test recipient timezone<input className={input} value={tz} onChange={e => { setTz(e.target.value); setProposal(null); }} /></label>
             <button type="button" className={button} disabled={!testKey || !!result} onClick={() => run(async () => {
                 const start = new Date(Date.now() + 60000); const end = new Date(start.getTime() + 7 * 86400000);
-                const storageKey = `calendly.setup.${connection.id}`;
+                const storageKey = `calendly.setup.${connection.id}.${testKey}`;
                 const p = await api('POST', '/test-proposals', { appointment_key: testKey, timezone: tz, start_datetime: start.toISOString(), end_datetime: end.toISOString(), operation: proposal?.operation || sessionStorage.getItem(storageKey) || undefined });
                 sessionStorage.setItem(storageKey, p.operation);
                 setProposal(p); setSlot(''); setAnswers({});
@@ -132,7 +134,8 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
                 <div className="rounded border border-border p-3 text-sm"><p>{proposal.appointment_name} · {proposal.duration_minutes} minutes · {proposal.location_summary}</p><p>{proposal.slots.find(s => s.slot_reference === slot)?.start_datetime} · {tz}</p><p>{name} · {recipient}</p></div>
                 <label className="flex gap-2 text-sm"><input type="checkbox" checked={approved} onChange={e => setApproved(e.target.checked)} />I approve these details and authorize the invitation to this test email.</label>
                 <button type="button" className={button} disabled={!approved || !slot || !name || !recipient || !!result} onClick={() => run(async () => {
-                    setResult(await api('POST', '/test-bookings', { operation: proposal.operation, slot_reference: slot, name, email: recipient, answers: proposal.questions.map(q => ({ position: q.position, answer: answers[q.position] || '' })), booking_confirmed: approved, email_confirmed: approved }));
+                    const booked = await api('POST', '/test-bookings', { operation: proposal.operation, slot_reference: slot, name, email: recipient, answers: proposal.questions.map(q => ({ position: q.position, answer: answers[q.position] || '' })), booking_confirmed: approved, email_confirmed: approved });
+                    setResult(booked); setSetupAttempt(booked.attempt_reference || '');
                     await refresh();
                 })}>Create test booking and send invitation</button>
             </>}
@@ -148,10 +151,10 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
                     await api('POST', `/attempts/${result.attempt_reference}/observations`, { invitation_received: invitationChecked, calendar_verified: calendarChecked, cleanup_reported: cleanupChecked });
                     setNotice('Operator checks recorded with a timestamp; these do not prove API delivery or RSVP.');
                 })}>Record operator checks</button>}
-                {result.reservation_status === 'confirmed' && cleanupChecked && <button type="button" className={button} onClick={() => {
-                    sessionStorage.removeItem(`calendly.setup.${connection.id}`);
+                {result.reservation_status === 'confirmed' && cleanupChecked && proposal && result.attempt_reference === setupAttempt && <button type="button" className={button} onClick={() => {
+                    sessionStorage.removeItem(`calendly.setup.${connection.id}.${testKey}`);
                     setProposal(null); setResult(null); setSlot(''); setApproved(false);
-                    setCleanupChecked(false); setInvitationChecked(false); setCalendarChecked(false);
+                    setCleanupChecked(false); setInvitationChecked(false); setCalendarChecked(false); setSetupAttempt('');
                 }}>Start another setup test after cleanup</button>}
                 <p className="text-xs text-muted-foreground">These checks are operator observations, not API proof of delivery or current booking status. Voice behavior also needs a test call.</p>
             </div>}

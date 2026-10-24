@@ -70,3 +70,26 @@ def test_initialized_journal_reads_skip_schema_lock_and_writes(tmp_path):
             # even while another process owns a normal journal transaction.
             assert CalendlyStore(*paths).connection() == {'revision': 0, 'enabled': False}
             db.rollback()
+
+
+@pytest.mark.parametrize('retention', ['', 'invalid', ' 7 ', '0', '-1'])
+@pytest.mark.parametrize('mode', ['single', 'retention'])
+def test_cleanup_scrubs_resolution_notes_and_details_but_retains_audit_and_barriers(tmp_path, monkeypatch, retention, mode):
+    monkeypatch.setenv('CALL_HISTORY_RETENTION_DAYS', retention)
+    store = CalendlyStore(str(tmp_path / 'db'), str(tmp_path / 'token'))
+    with store.db() as db:
+        for key in ['target', 'preserved']:
+            created = time.time() - 40 * 86400 if mode == 'retention' and key == 'target' else time.time()
+            db.execute("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                key, 'call:'+key, 'conn', 'fingerprint', 'duplicate-'+key, 'marker', 'needs_operator',
+                '{"email":"test@example.com"}', '{"appointment_name":"Test"}', created, 0, 0, 0, 0, 0))
+    for key in ['target', 'preserved']:
+        store.resolve(key, 'operator', 'Test private note test@example.com')
+    store.cleanup(['target'] if mode == 'single' else None)
+    target = store.attempt('target')
+    assert target['private'] == target['public'] == '{}'
+    assert target['duplicate_key'] == 'duplicate-target' and target['operation'] == 'call:target'
+    assert store.attempt('preserved')['public'] != '{}'
+    with store.db() as db:
+        assert tuple(db.execute("SELECT actor,outcome,note FROM resolutions WHERE attempt_id='target'").fetchone()) == ('operator', 'resolved_externally', '')
+        assert db.execute("SELECT note FROM resolutions WHERE attempt_id='preserved'").fetchone()[0] == 'Test private note test@example.com'
