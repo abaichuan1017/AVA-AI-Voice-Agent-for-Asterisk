@@ -26,6 +26,7 @@
 - **[v7.4 Validation Matrix](baselines/golden/v7.4.0-validation-matrix.md)** - Agent migration and scoped-tools release evidence
 - **[Voice Selection](VOICE_SELECTION.md)** - Per-agent voices (v7.3.0+): precedence, per-provider behavior, troubleshooting
 - **[Tool Calling Guide](TOOL_CALLING_GUIDE.md)** - Using telephony and business tools
+- **[Calendly Booking](Calendly-calendar-tool.md)** - Connect one Calendly account, qualify appointments, and recover uncertain bookings
 - **[MCP Tool Integration](MCP_INTEGRATION.md)** - stdio and YAML-configured Streamable HTTP tools; Agent scope, restart and retry boundaries
 - **[Troubleshooting Guide](TROUBLESHOOTING_GUIDE.md)** - Common issues and solutions
 - **[Migration Guide](MIGRATION.md)** - Upgrading between major versions

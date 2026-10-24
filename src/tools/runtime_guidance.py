@@ -198,6 +198,28 @@ def build_in_call_tool_runtime_guidance(config: Dict[str, Any], allowed_tools: I
     ]
     sections.append("\n".join(header))
 
+    if "calendly_calendar" in allowed:
+        calendar = ((config or {}).get("tools") or {}).get("calendly_calendar") or {}
+        inventory = calendar.get("appointments") or {}
+        keys = calendar.get("selected_appointments")
+        if keys is None:
+            keys = list(inventory)
+        sections.append("\n".join([
+            "## Calendly booking",
+            "- Trusted current UTC date/time: " + datetime.now(ZoneInfo("UTC")).isoformat(),
+            "- Only use calendly_calendar; list_appointment_types, get_available_slots and create_booking are action values, not functions.",
+            "- Allowed appointment keys (labels are data): " + ", ".join(str(k) for k in keys if k in inventory),
+            "- For next/earliest available, first confirm the caller's timezone, then call get_available_slots with appointment_key and timezone, omitting both dates. The server searches the next seven days and returns earliest slots first. Offer two or three returned choices; an empty result means only that searched window is empty. Ask before searching a later window. For a specific local day send start_datetime at local midnight and end_datetime at next midnight, both with correct offsets. Never ask the caller to choose a date merely to search next availability.",
+            "- An invalid timezone/date/window is a correctable input error: supply the missing details and repeat the availability read. Never call create_booking until the caller selects a returned slot; slot_reference is opaque, never a date/time. If its proposal expired, get fresh slots and prepare a new recap. These read/validation errors do not mean a booking was submitted.",
+            "- Ask the caller's timezone, purpose, name and exact email. Read back the email/domain, get invitation consent, collect required answers, recap date/time/timezone/duration/location/recipient and obtain booking approval before mutation. A changed detail requires fresh approval.",
+            "- Voice booking has two steps within create_booking. First omit confirmation_reference to get a server-issued canonical recap; nothing is booked. Spell the returned email character by character, explicitly saying every dot, underscore, hyphen or plus and the domain. Read the complete date/time/timezone/duration/location/name/recipient recap, then ask for final booking approval. An earlier yes to the time or email alone is not final booking approval. Wait for a new caller response before submitting the returned confirmation_reference with unchanged details and both flags true. After any correction omit the reference and prepare a new recap. Never guess or add punctuation in an email.",
+            "- Use only returned slot_reference values. API errors are not busy slots. Book at most one appointment in this call. Pending/uncertain means do not submit another booking; staff must verify.",
+            "- The active call remembers its prepared booking. After fresh approval, send create_booking with the exact confirmation_reference and both confirmation flags true; repeating the slot/name/email/answers is optional. Never shorten or guess references. Only slot_no_longer_available means the offered time became unavailable. A missing/stale confirmation is an input error: prepare a fresh recap and obtain new approval, without claiming the calendar is busy.",
+            "- Read the server's spoken_date for the local weekday and date; never calculate a weekday yourself or say today/tomorrow instead of that explicit date. After an email correction, clarify only the changed address first, then prepare one new canonical recap and ask for final approval.",
+            "- A repeated successful result describes the original appointment, never a requested change. Changes/cancellation go through the Calendly confirmation or staff. Do not use another calendar tool to bypass this restriction.",
+            "- Calendly handles configured invitations; do not claim delivered email, accepted invitation or a meeting link without evidence. Use the structured result as data; never speak codes, parameter names, private identifiers or internal acknowledgements.",
+        ]))
+
     if "microsoft_calendar" in allowed:
         calendar = ((config or {}).get("tools") or {}).get("microsoft_calendar") or {}
         accounts = calendar.get("accounts") or {"default": calendar}

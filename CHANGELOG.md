@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tabbed settings editor protects unsaved changes and sends only edited fields. Appearance
   uses additive SQLite columns and is included in existing database backups; see
   [upgrade and rollback guidance](docs/AGENTS_EXPERIENCE_ROLLOUT.md).
+- Native Calendly v1 booking with a guided single-account connection, per-agent appointment selection, explicit setup tests, durable submission/duplicate guards, and bounded positive reconciliation. Calendly handles configuration, invitations, and later booking changes; uncertain writes are never automatically resubmitted.
 - Native Pushover as a named tool in the existing pre/in/post-call workflow, with normal Agent selection, configurable descriptions/templates, masked per-tool credentials, multiple enabled user/group recipients, one shared summary per invocation, generic phase defaults with optional CRM customizations, official documentation links and explicit previews/tests.
 - Provider-backed in-call HTTP summaries with safe placeholders, failure policy, combined timeout budgets and independent generation diagnostics.
 - **Initial greeting readiness (#752):** opt-in AudioSocket/ExternalMedia streaming
@@ -39,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Admin dependencies:** update WebSockets to 17.3, Radix Alert Dialog to 1.2.1,
+  Testing Library user-event to 14.6.8, and PostCSS to 8.5.31. Retain the current
+  React Refresh plugin pending the separate ESLint migration. Keep Admin Local AI
+  WebSocket connections direct when environment or system proxies are configured.
+  Align the standalone backend image and setup prerequisite with Python 3.11.
+
 - **Dependencies:** update the Admin frontend follow-redirects lockfile to 1.16.1,
   engine aiohttp to 3.14.4, and Admin FastAPI/Pydantic to 0.143.3/2.14.1.
 
@@ -49,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Save & Apply** action. Transfer routing/timing settings use a disclosure.
 
 ### Fixed
+
+- Keep call-deleted Calendly operations immutable, including a deletion that wins before admission, so delayed booking or reconciliation responses cannot restore erased details; retain replay barriers while preserving previously released cross-call duplicates, and explicitly report that erasure does not cancel remote appointments.
+- Preserve explicit Calendly Agent denial through tool disable/re-enable, isolate setup operations by appointment, erase resolution notes with retained audit barriers, and keep recovery tasks independent when cleanup or another attempt fails. Load pending requests on setup entry, preserve recovery checks during rate-limit cooldowns, and keep valid appointments discoverable when another binding is incomplete.
+- Preserve Google buffered-audio order across concurrent flushes and interruption, reject stale chunks across latency-tracking awaits, and pace partial speech tails after the filler idle cutoff so terminal audio drain can finish.
+- Keep Calendly erasure work durable through journal absence and disabled history collection; handle malformed readback safely, display Agent access defaults consistently with runtime, preserve the latest UI draft after async setup, and expose matching recovery request references.
 
 - **Onward transfers preserve the caller** ([#699](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues/699)):
   after an accepted AVA attended handoff, adopt Asterisk's replacement human leg

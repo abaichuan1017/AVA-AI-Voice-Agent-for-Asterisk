@@ -17,6 +17,7 @@ interface Props {
     transferDestinations: TransferDestination[];
     googleCalendars: AgentResourceOption[];
     microsoftAccounts: AgentResourceOption[];
+    calendlyAppointments?: AgentResourceOption[];
     voicemailMailboxes: AgentResourceOption[];
 }
 
@@ -40,6 +41,7 @@ const AgentToolPicker: React.FC<Props> = ({
     transferDestinations,
     googleCalendars,
     microsoftAccounts,
+    calendlyAppointments = [],
     voicemailMailboxes,
 }) => {
     const [open, setOpen] = useState<Record<string, boolean>>(
@@ -142,6 +144,15 @@ const AgentToolPicker: React.FC<Props> = ({
                                                         ? state.googleCalendarKeys : [],
                                                 })}
                                                 onSelectedKeysChange={keys => onChange({ ...state, googleCalendarKeys: keys })}
+                                            />
+                                        )}
+                                        {tool.name === 'calendly_calendar' && checked && (
+                                            <ResourceAccessEditor title="Calendly appointment access"
+                                                description="Select appointments this agent may book. Later changes use the Calendly confirmation or staff."
+                                                resourceName="appointment" options={calendlyAppointments}
+                                                policy={state.calendlyPolicy} selectedKeys={state.calendlyKeys}
+                                                onPolicyChange={policy => onChange({ ...state, calendlyPolicy: policy, calendlyKeys: policy === 'selected' ? state.calendlyKeys : [] })}
+                                                onSelectedKeysChange={keys => onChange({ ...state, calendlyKeys: keys })}
                                             />
                                         )}
                                         {tool.name === 'microsoft_calendar' && checked && (

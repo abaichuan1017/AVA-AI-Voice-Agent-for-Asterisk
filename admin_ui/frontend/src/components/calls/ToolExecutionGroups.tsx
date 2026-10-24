@@ -54,6 +54,12 @@ export interface PhaseToolCall extends ToolDiagnostics {
 }
 
 export interface InCallToolCall extends ToolDiagnostics {
+    reservation_status?: string;
+    attempt_reference?: string;
+    appointment_name?: string;
+    start_datetime?: string;
+    end_datetime?: string;
+    timezone?: string;
     type?: 'tool_result';
     call_id?: string;
     tool_call_id?: string;
@@ -168,7 +174,7 @@ export const InCallToolGroup = ({ entries }: { entries: InCallToolCall[] }) => {
         <div className="space-y-2">
             {entries.map((tool, i) => {
                 const succeeded = tool.status ? tool.status === 'success' : tool.result === 'success';
-                const status: ToolExecutionStatus = succeeded ? 'ok' : 'error';
+                const status: ToolExecutionStatus = tool.name === 'calendly_calendar' && ['submitting', 'uncertain', 'needs_operator'].includes(tool.reservation_status || '') ? 'pending' : succeeded ? 'ok' : 'error';
                 const hasParams = tool.params && typeof tool.params === 'object' && Object.keys(tool.params).length > 0;
                 const invocationId = tool.tool_call_id || tool.call_id;
                 return (
@@ -197,6 +203,12 @@ export const InCallToolGroup = ({ entries }: { entries: InCallToolCall[] }) => {
                             </div>
                         )}
                         <ToolDiagnosticsView entry={tool} />
+                        {tool.name === 'calendly_calendar' && tool.reservation_status && <div className="mt-2 text-xs space-y-1">
+                            {tool.attempt_reference && <p className="break-all">Request reference: <span className="font-mono">{tool.attempt_reference}</span></p>}
+                            <p>{tool.appointment_name} · {tool.start_datetime} · {tool.timezone}</p>
+                            <p>Recorded outcome: {tool.reservation_status}. This is not a continuously synchronized booking status.</p>
+                            <a className="text-primary underline" href="/tools?section=calendly_calendar">Review Calendly requests</a>
+                        </div>}
                         {tool.message && <div className="mt-2 text-xs text-muted-foreground break-words">{tool.message}</div>}
                         {hasParams && (
                             <pre className="mt-2 text-xs bg-background/50 rounded p-2 overflow-x-auto">

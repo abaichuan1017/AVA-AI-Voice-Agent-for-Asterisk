@@ -934,6 +934,11 @@ def _validate_ai_agent_config(content: str) -> Dict[str, Any]:
 
     # Native tool config is also saved by the normal full-document Tools/YAML flow.
     # Reject invalid shapes without returning Pydantic input values (possible keys).
+    from src.tools.business.calendly_client import validate_config as validate_calendly_config
+    try:
+        validate_calendly_config((parsed.get("tools") or {}).get("calendly_calendar"))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid Calendly configuration. Save credentials through the connection panel.") from None
     from src.integrations.pushover import PushoverToolConfig
     for block in ("tools", "in_call_tools"):
         section = parsed.get(block)
@@ -1391,6 +1396,9 @@ async def get_config():
 def _redact_websocket_media_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
     """Defensively keep an accidentally hand-written WS secret out of API reads."""
     safe = deepcopy(config)
+    if isinstance(safe.get("tools"), dict) and "calendly_calendar" in safe["tools"]:
+        from src.tools.business.calendly_client import public_config
+        safe["tools"]["calendly_calendar"] = public_config(safe["tools"]["calendly_calendar"])
     websocket_media = safe.get("websocket_media") if isinstance(safe, dict) else None
     auth = websocket_media.get("auth") if isinstance(websocket_media, dict) else None
     if isinstance(auth, dict):
@@ -2038,7 +2046,7 @@ async def test_provider_connection(request: ProviderTestRequest):
                     return url
 
                 async def _try_connect(url: str):
-                    async with websockets.connect(url, open_timeout=5.0) as ws:
+                    async with websockets.connect(url, open_timeout=5.0, proxy=None) as ws:
                         if auth_token:
                             await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
                             response = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -2241,7 +2249,7 @@ async def test_provider_connection(request: ProviderTestRequest):
             try:
                 import websockets
                 # Try connecting to the WebSocket
-                async with websockets.connect(ws_url, open_timeout=5.0) as ws:
+                async with websockets.connect(ws_url, open_timeout=5.0, proxy=None) as ws:
                     await ws.close()
                 return {"success": True, "message": "Local AI server is reachable via WebSocket"}
             except ImportError:

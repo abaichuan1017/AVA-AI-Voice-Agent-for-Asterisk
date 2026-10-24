@@ -87,7 +87,7 @@ If you already have a working configuration, the wizard will be skipped automati
 ### Prerequisites
 
 - Node.js 18+ and npm
-- Python 3.10+
+- Python 3.11+ (required by the Admin WebSockets dependency)
 - Git
 
 ### Installation Steps

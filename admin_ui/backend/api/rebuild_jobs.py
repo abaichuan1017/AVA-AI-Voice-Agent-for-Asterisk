@@ -429,7 +429,7 @@ def _verify_backend_loaded(job_id: str, backend: str, timeout: int = 60) -> bool
                         port = (env.get("LOCAL_WS_PORT") or "8765").strip() or "8765"
                         token = (env.get("LOCAL_WS_AUTH_TOKEN") or "").strip()
                         url = f"ws://127.0.0.1:{port}"
-                        async with websockets.connect(url, open_timeout=5, max_size=None) as ws:
+                        async with websockets.connect(url, open_timeout=5, max_size=None, proxy=None) as ws:
                             if token:
                                 await ws.send(json.dumps({"type": "auth", "auth_token": token}))
                                 raw = await asyncio.wait_for(ws.recv(), timeout=5)

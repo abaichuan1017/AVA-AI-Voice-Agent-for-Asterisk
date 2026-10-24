@@ -41,7 +41,10 @@ const ToolsPage = () => {
     const [config, setConfigState] = useState<any>(() => getCachedConfig()?.config ?? {});
     const [savedSignature, setSavedSignature] = useState(() => JSON.stringify(getCachedConfig()?.config ?? {}));
     const [loadError, setLoadError] = useState<string | null>(null);
-    const [selectedSection, setSelectedSection] = useState<ToolSection | null>(null);
+    const [selectedSection, setSelectedSection] = useState<ToolSection | null>(() => {
+        const requested = new URLSearchParams(window.location.search).get('section');
+        return toolSections.some(tool => tool.key === requested) ? requested as ToolSection : null;
+    });
     const [query, setQuery] = useState('');
     const [httpEditing, setHttpEditing] = useState(false);
     const headingRef = useRef<HTMLHeadingElement>(null);
@@ -307,7 +310,7 @@ const ToolsPage = () => {
         // This prevents silent config loss of custom/unknown tool entries.
         // Built-in tools that ToolForm manages: transfer, hangup_call, leave_voicemail, 
         // send_email_summary, request_transcript
-        const builtInToolKeys = ['transfer', 'attended_transfer', 'cancel_transfer', 'hangup_call', 'leave_voicemail', 'send_email_summary', 'request_transcript', 'google_calendar', 'microsoft_calendar'];
+        const builtInToolKeys = ['transfer', 'attended_transfer', 'cancel_transfer', 'hangup_call', 'leave_voicemail', 'send_email_summary', 'request_transcript', 'google_calendar', 'microsoft_calendar', 'calendly_calendar'];
         const existingTools = baseConfig.tools || {};
         const preservedTools: Record<string, any> = {};
 

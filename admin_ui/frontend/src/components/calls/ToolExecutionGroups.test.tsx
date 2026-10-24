@@ -77,6 +77,15 @@ describe('PhaseToolGroup', () => {
 });
 
 describe('InCallToolGroup', () => {
+    it('shows the Calendly attempt reference next to the recorded outcome', () => {
+        render(<InCallToolGroup entries={[{
+            name: 'calendly_calendar', action: 'create_booking', status: 'pending',
+            reservation_status: 'uncertain', attempt_reference: 'request-ref-123', duration_ms: 20,
+        }]} />);
+        expect(screen.getByText('request-ref-123')).toBeInTheDocument();
+        expect(screen.getByText(/Recorded outcome: uncertain/)).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Review Calendly requests' })).toHaveAttribute('href', '/tools?section=calendly_calendar');
+    });
     it('renders the enriched contract and treats normalized status as authoritative', () => {
         render(
             <InCallToolGroup
