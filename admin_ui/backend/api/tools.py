@@ -1494,6 +1494,12 @@ def _to_out(
 
 async def _validate_summary_provider_selection(doc: Dict[str, Any]) -> None:
     """Reject an explicit summary provider that cannot run before persistence."""
+    if doc.get("phase") == "in_call":
+        from src.tools.summary import summary_prompt
+        try:
+            summary_prompt(doc.get("summary_prompt"), doc.get("summary_max_words") or 100)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="In-call summary_prompt only supports the plain {max_words} placeholder") from None
     if not doc.get("generate_summary"):
         return
     provider_key = str(doc.get("summary_provider") or "").strip()

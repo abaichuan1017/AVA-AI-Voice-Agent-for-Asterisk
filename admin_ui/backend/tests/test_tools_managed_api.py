@@ -745,3 +745,27 @@ def test_builtin_patch_accepts_valid_email_and_persists(email_client):
     assert len(email_client.state["writes"]) == 1  # valid data persisted once
     persisted = yaml.safe_load(email_client.state["writes"][0])
     assert persisted["tools"]["send_email_summary"]["admin_email"] == "ops@example.com"
+
+
+@pytest.mark.parametrize("prompt", ["{max_words!r}", "{max_words:>5}", "{max_words:0{max_words}}"])
+def test_in_call_prompt_formatting_rejected_before_any_persistence(client, prompt):
+    api, state = client, client.cfg_state
+    payload = {"name": "summary_prompt_guard", "phase": "in_call", "kind": "in_call_http_lookup", "url": "https://example.com", "summary_prompt": prompt}
+    response = api.post("/api/tools/managed", json=payload)
+    assert response.status_code == 422
+    assert "summary_prompt_guard" not in state["cfg"]["in_call_tools"]
+    payload["summary_prompt"] = "Summarize in {max_words} words."
+    assert api.post("/api/tools/managed", json=payload).status_code == 201
+    before = copy.deepcopy(state)
+    assert api.patch("/api/tools/managed/summary_prompt_guard", json={"summary_prompt": prompt}).status_code == 422
+    assert state == before
+    assert api.put("/api/tools/managed/summary_prompt_guard", json={**payload, "summary_prompt": prompt}).status_code == 422
+    assert state == before
+
+
+def test_legacy_post_call_prompt_formatting_is_preserved(client):
+    api = client
+    payload = {"name": "legacy_summary_prompt", "phase": "post_call", "kind": "generic_webhook", "url": "https://example.com", "summary_prompt": "Use {max_words:>5} words."}
+    response = api.post("/api/tools/managed", json=payload)
+    assert response.status_code == 201
+    assert response.json()["config"]["summary_prompt"] == payload["summary_prompt"]
