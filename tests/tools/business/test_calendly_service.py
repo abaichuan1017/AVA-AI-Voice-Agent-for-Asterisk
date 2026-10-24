@@ -324,6 +324,9 @@ def test_paths_config_email_and_scope(setup):
     for uri in ["https://evil.invalid/users/a", "http://api.calendly.com/users/a", "https://api.calendly.com/users/../a", USER+"?token=x"]:
         with pytest.raises(CalendlyError): resource_path(uri)
     assert email("Test+tag@EXAMPLE.com") == "Test+tag@example.com"
+    with pytest.raises(CalendlyError): email("test@example.com\r\nBcc: other@example.com")
+    scoped = resolve_agent_tool_config({"tools": {"calendly_calendar": cfg}}, {"calendly_calendar": {"appointment_policy": "selected", "appointment_keys": []}})
+    assert scoped.config["tools"]["calendly_calendar"]["selected_appointments"] == []
 
 
 def test_existing_calls_do_not_gain_calendly_without_explicit_tool_assignment():
@@ -335,9 +338,6 @@ def test_existing_calls_do_not_gain_calendly_without_explicit_tool_assignment():
     assert registry.get_tools_for_context(ToolPhase.IN_CALL, context_tool_names=[]) == []
     assert [tool.definition.name for tool in registry.get_tools_for_context(
         ToolPhase.IN_CALL, context_tool_names=['calendly_calendar'])] == ['calendly_calendar']
-    with pytest.raises(CalendlyError): email("test@example.com\r\nBcc: other@example.com")
-    scoped = resolve_agent_tool_config({"tools": {"calendly_calendar": cfg}}, {"calendly_calendar": {"appointment_policy": "selected", "appointment_keys": []}})
-    assert scoped.config["tools"]["calendly_calendar"]["selected_appointments"] == []
 
 
 def test_permission_and_retention_tombstone(setup):
