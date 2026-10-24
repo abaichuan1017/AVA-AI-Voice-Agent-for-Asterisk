@@ -148,6 +148,17 @@ async def test_identity_denial_is_distinct_from_booking_eligibility(setup):
     assert fake.posts == 0
 
 
+async def test_verify_needs_candidate_or_saved_token_and_does_not_require_enabled_booking(setup):
+    store, service, fake, _ = setup
+    conn = store.connection()
+    store.update_connection(conn['revision'], enabled=False)
+    assert (await service.verify())['uri'] == USER
+    assert fake.posts == 0
+    store.disconnect(conn['revision'])
+    with pytest.raises(CalendlyError, match='verification_token_required'):
+        await service.verify()
+
+
 async def test_lost_response_reconciles_after_restart_without_post(setup):
     store, service, fake, cfg = setup
     conn = store.connection()

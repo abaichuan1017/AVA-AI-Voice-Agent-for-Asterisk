@@ -79,14 +79,16 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
         <p className="text-sm text-muted-foreground">Connect one operator-owned Calendly account. Standard or higher is required for booking. Configure calendars, appointment types and notifications in Calendly; later changes use the Calendly confirmation or staff.</p>
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
         {notice && <p role="status" className="text-sm">{notice}</p>}
+        {verified && <p role="status" className="rounded-md border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-700 dark:text-green-400">{verified}</p>}
         <fieldset disabled={busy} className="space-y-4 min-w-0">
             <legend className="text-lg font-medium">1. Connect Calendly</legend>
             <p>{connection.id ? `${connection.name} · ${connection.timezone} · ${connection.enabled ? 'Scheduling enabled' : 'Scheduling paused'}` : 'Not connected'}</p>
             <a href="https://calendly.com/integrations/api_webhooks" target="_blank" rel="noopener noreferrer" className="text-primary underline">Open Calendly to create a personal access token</a>
             <p className="text-xs text-muted-foreground">Scopes: users:read, event_types:read, availability:read, scheduled_events:write. Saved tokens are never displayed.</p>
             <label className="block text-sm">{connection.id ? 'Replace saved token' : 'Personal access token'}<input className={input} type="password" autoComplete="off" value={candidate} onChange={e => changeCandidate(e.target.value)} /></label>
+            {!connection.id && <p className="text-xs text-muted-foreground">Enter a token to verify your connection. Booking stays paused when you save it.</p>}
             <div className="flex flex-wrap gap-2">
-                <button type="button" className={button} onClick={() => run(verify, 'Connection verification did not finish. No booking was submitted. Try Verify connection again.')}>Verify connection</button>
+                <button type="button" className={button} disabled={!candidate.trim() && !connection.id} onClick={() => run(verify, 'Connection verification did not finish. No booking was submitted. Try Verify connection again.')}>Verify connection</button>
                 <button type="button" className={button} disabled={!candidate || !verified} onClick={() => run(async () => {
                     const saved = await api('PUT', '/connection', { token: candidate, revision: connection.revision });
                     setConnection(saved); changeCandidate(''); setEntries([]); setProposal(null); setResult(null);
@@ -98,7 +100,6 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
                     <button type="button" className={button} onClick={() => run(async () => { await api('DELETE', '/connection', { revision: connection.revision }); await refresh(); setProposal(null); setNotice('Disconnected locally. Existing appointments remain in Calendly; admitted requests may still settle.'); })}>Disconnect</button>
                 </>}
             </div>
-            {verified && <p role="status">{verified}</p>}
         </fieldset>
         {connection.id && <fieldset disabled={busy} className="space-y-4 min-w-0">
             <legend className="text-lg font-medium">2. Choose appointments</legend>

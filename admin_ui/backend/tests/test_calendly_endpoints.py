@@ -80,6 +80,18 @@ async def test_verify_save_replace_and_disconnect(api):
 
 
 @pytest.mark.asyncio
+async def test_empty_verification_requires_a_token_without_enabling_booking(api, monkeypatch):
+    app, _, headers = api
+    s = await calendly.service()
+    monkeypatch.setattr(s, 'verify', CalendlyService.verify.__get__(s))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test', headers=headers) as client:
+        response = await client.post('/api/calendly/connection/verify', json={})
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'verification_token_required'
+    assert 'Enter a personal access token' in response.json()['detail']['message']
+
+
+@pytest.mark.asyncio
 async def test_test_routes_reject_arbitrary_operations_and_missing_confirmation(api):
     app, store, headers = api
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers) as client:

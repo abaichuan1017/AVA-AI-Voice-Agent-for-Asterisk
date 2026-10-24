@@ -55,6 +55,7 @@ async def safe(awaitable):
         # upstream response body, request arguments, or exception repr.
         logging.getLogger(__name__).warning("Calendly action failed (%s)", exc.code)
         messages = {
+            "verification_token_required": "Enter a personal access token in the field above, then verify the connection. Booking can remain paused.",
             "invalid_token": "Paste only the personal access token, with no surrounding spaces or line breaks.",
             "network_unavailable": "The server could not reach Calendly. Wait briefly and verify the connection again.",
             "invalid_response": "Calendly returned an unreadable response. Check the saved request status before repeating a booking.",

@@ -77,7 +77,12 @@ class CalendlyService:
                 raise CalendlyError("invalid_token")
             client = self.client_factory(token)
         else:
-            _, client = await self.credentials()
+            try:
+                _, client = await self.credentials()
+            except CalendlyError as exc:
+                if exc.code in {"connection_disabled", "credential_unavailable"}:
+                    raise CalendlyError("verification_token_required") from None
+                raise
         try:
             person = await self.identity(client)
         except CalendlyError as exc:
