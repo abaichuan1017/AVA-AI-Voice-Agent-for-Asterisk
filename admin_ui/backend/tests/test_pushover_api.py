@@ -398,3 +398,76 @@ def test_native_name_limit_matches_runtime_without_changing_http_contract(client
         == 422
     )
     assert state == before
+
+
+@pytest.mark.parametrize("phase", ["pre_call", "in_call", "post_call"])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"body_template": "custom body that must not disappear"},
+        {"payload_template": '{"custom": "must not disappear"}' },
+        {"query_params": {"custom": "value"}},
+        {"output_variables": {"custom": "value"}},
+        {"method": "GET"},
+        {"return_raw_json": True},
+    ],
+)
+def test_native_rejects_nonempty_http_only_fields_in_all_write_paths(
+    client, phase, extra
+):
+    browser, state, sender, _ = client
+    payload = {"name": "native_guard", "phase": phase, "kind": "pushover"}
+    before = copy.deepcopy(state)
+    assert (
+        browser.post("/api/tools/managed", json={**payload, **extra}).status_code == 422
+    )
+    assert state == before
+    assert browser.post("/api/tools/managed", json=payload).status_code == 201
+    before = copy.deepcopy(state)
+    assert (
+        browser.put(
+            "/api/tools/managed/native_guard", json={**payload, **extra}
+        ).status_code
+        == 422
+    )
+    assert state == before
+    assert (
+        browser.patch("/api/tools/managed/native_guard", json=extra).status_code == 422
+    )
+    assert state == before and not sender.send.called
+
+
+@pytest.mark.parametrize("phase", ["pre_call", "in_call", "post_call"])
+def test_native_accepts_empty_http_write_defaults_and_native_edits(client, phase):
+    browser, _, sender, _ = client
+    defaults = {
+        "name": "empty_defaults",
+        "phase": phase,
+        "kind": "pushover",
+        "headers": {},
+        "parameters": [],
+        "query_params": {},
+        "body_template": "",
+        "payload_template": "",
+        "output_variables": {},
+        "call_metadata_fields": {},
+        "return_raw_json": False,
+        "method": "POST",
+    }
+    response = browser.post("/api/tools/managed", json=defaults)
+    assert response.status_code == 201, response.text
+    assert (
+        browser.put("/api/tools/managed/empty_defaults", json=defaults).status_code
+        == 200
+    )
+    assert (
+        browser.patch("/api/tools/managed/empty_defaults", json=defaults).status_code
+        == 200
+    )
+    edited = browser.patch(
+        "/api/tools/managed/empty_defaults",
+        json={"body": "Caller: {caller_number}\nCall: {call_id}"},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["config"]["body"] == "Caller: {caller_number}\nCall: {call_id}"
+    assert not sender.send.called

@@ -1381,7 +1381,12 @@ def _build_tool_doc(data: Dict[str, Any], phase: str) -> Dict[str, Any]:
         from src.integrations.pushover import PushoverToolConfig
         allowed = set(PushoverToolConfig.model_fields)
         try:
-            if data.get("url") or data.get("headers") or data.get("parameters"):
+            http_only = (
+                "url", "headers", "parameters", "query_params", "body_template",
+                "payload_template", "output_variables", "call_metadata_fields",
+                "hold_audio_file", "hold_audio_threshold_ms", "return_raw_json", "error_message",
+            )
+            if any(data.get(key) for key in http_only) or data.get("method") not in (None, "", "POST"):
                 raise ValueError()
             return PushoverToolConfig.model_validate({key: value for key, value in {**data, "phase": phase}.items() if key in allowed and value is not None}).model_dump()
         except Exception:
@@ -1631,15 +1636,16 @@ async def patch_managed_tool(name: str, body: ManagedToolPatch):
     merged["kind"] = _resolve_kind(
         new_phase, requested_kind or ("pushover" if current_kind == "pushover" else None)
     )
-    merged["method"] = str(
-        merged.get("method") or ("GET" if new_phase == "pre_call" else "POST")
-    ).upper()
-    if merged["method"] not in _BODY_CAPABLE_HTTP_METHODS:
-        merged.pop("body_template", None)
-        merged.pop("payload_template", None)
+    if merged["kind"] != "pushover":
+        merged["method"] = str(
+            merged.get("method") or ("GET" if new_phase == "pre_call" else "POST")
+        ).upper()
+        if merged["method"] not in _BODY_CAPABLE_HTTP_METHODS:
+            merged.pop("body_template", None)
+            merged.pop("payload_template", None)
 
     raw_metadata_fields = merged.get("call_metadata_fields")
-    if raw_metadata_fields is not None:
+    if merged["kind"] != "pushover" and raw_metadata_fields is not None:
         if new_phase != "pre_call":
             raise HTTPException(status_code=422, detail="call_metadata_fields is only valid for pre-call tools")
         from src.core.call_metadata import CallMetadataValidationError, normalize_call_metadata_policy

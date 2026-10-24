@@ -111,7 +111,9 @@ Templates support `{agent}`, `{context_name}`, `{stage}`, `{name}`, `{caller_nam
 `{identity_source}`, `{company}`, `{crm_status}`, `{caller_number}`, `{callback_number}`,
 `{called_number}`, `{destination}`, `{call_id}`, `{outcome}`, `{call_outcome}`,
 `{call_duration}`, `{language}`, `{meeting}`, `{summary}` and `{summary_status}`.
-Values are inserted once as plain text; missing data is unknown. Titles are bounded
+Values are inserted once as plain text; missing data is unknown. The native message
+field is `body`; nonempty HTTP-only fields such as `body_template`,
+`payload_template` and `query_params` are rejected rather than silently dropped. Titles are bounded
 at 250 characters and messages at 1,024 Unicode characters. The default template
 preserves structured details and shortens the recap to fit.
 
