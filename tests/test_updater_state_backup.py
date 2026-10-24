@@ -1,9 +1,11 @@
 """Exercise private backup contents without a deployment or external services."""
 import os
+import importlib.util
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,7 +30,7 @@ def test_recovery_and_cli_embed_identical_backup_logic():
     assert embedded == HELPER.read_text().rstrip()
 
 
-def test_absent_integrations_are_optional(tmp_path):
+def test_absent_state_is_optional(tmp_path):
     assert run_backup(tmp_path).returncode == 0
     assert list((tmp_path / "backup").iterdir()) == []
 
@@ -175,3 +177,34 @@ def test_unreadable_secret_subdirectory_fails_closed(tmp_path):
         assert run_backup(tmp_path).returncode != 0
     finally:
         directory.chmod(0o700)
+
+
+@pytest.mark.parametrize("expired_step", ["PRAGMA journal_mode=DELETE", "PRAGMA integrity_check"])
+def test_verification_steps_respect_snapshot_deadline(tmp_path, monkeypatch, expired_step):
+    spec = importlib.util.spec_from_file_location("updater_state_backup", HELPER)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    for name in ("CALENDLY_DB_PATH", "CALENDLY_TOKEN_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    journal = tmp_path / "data/operator/calendly.db"
+    journal.parent.mkdir(parents=True)
+    with sqlite3.connect(journal) as source:
+        source.execute("CREATE TABLE attempts (state TEXT)")
+        source.executemany("INSERT INTO attempts VALUES (?)", [("synthetic",)] * 10000)
+    clock = [0.0]
+
+    class DeadlineConnection(sqlite3.Connection):
+        def execute(self, statement, *args, **kwargs):
+            if statement == expired_step:
+                clock[0] = 31.0
+            return super().execute(statement, *args, **kwargs)
+
+    def connect(*args, **kwargs):
+        return sqlite3.connect(*args, **kwargs, factory=DeadlineConnection)
+
+    monkeypatch.setattr(helper, "sqlite3", SimpleNamespace(connect=connect))
+    monkeypatch.setattr(helper, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    expected = sqlite3.OperationalError if expired_step.endswith("integrity_check") else TimeoutError
+    with pytest.raises(expected):
+        helper.backup(tmp_path, tmp_path / "backup")
+    assert not (tmp_path / "backup/data/operator/calendly.db").exists()

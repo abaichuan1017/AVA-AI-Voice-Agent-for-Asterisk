@@ -138,10 +138,14 @@ def backup(root, destination):
         try:
             with closing(sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True, timeout=5)) as source:
                 with closing(sqlite3.connect(target)) as output:
+                    output.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
                     source.backup(output, pages=256, progress=progress, sleep=0.01)
+                    progress()
                     output.execute("PRAGMA journal_mode=DELETE")
+                    progress()
                     if output.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                         raise ValueError("invalid integration snapshot")
+                    progress()
         except Exception:
             if target.exists():
                 target.unlink()
