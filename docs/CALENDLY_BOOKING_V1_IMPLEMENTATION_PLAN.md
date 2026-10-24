@@ -20,6 +20,8 @@ The recap fix was deployed with rebuilt candidate images at 05:14:47 UTC October
 
 Post-restart availability previews encountered transient read timeouts. A separate read-only probe succeeded (metadata approximately 2.5 seconds, exact availability 1.8 seconds). Metadata/availability requests now share at most one transient network GET retry per operation/client, inside the existing service deadlines; quota/invalid responses and every POST remain non-retryable. Focused confirmation/recovery/privacy/runtime checks passed 135 tests, and the final core gate passed 3,585 tests / 3 skipped / 176 CI exclusions with 59.49% coverage. This does not relax the durable admission or ambiguous-write policy.
 
+The final read-retry candidate was recreated at 05:22:40 UTC, loaded configuration at 05:23:24 UTC, and recovered healthy with all providers ready and zero calls/sessions/channels. A seven-day read-only service probe returned ten slots and the Google Meet label; the browser preview subsequently succeeded with the same friendly label. Booking remains paused, both real test appointments are canceled, and another voice acceptance call is awaiting operator readiness. Final restart evidence: `logs/archived/rca-20261024-052400` in the original operator workspace. No draft PR has been opened.
+
 Repository inspection baseline: `e8923779f066bccc7e8c185d007db65869c2a175`. The working checkout contains unrelated uncommitted calendar, provider, and other work. Reinspect current main and relevant changes before implementation; do not overwrite or incorporate unrelated work by accident.
 
 ## 1. Outcome and scope
