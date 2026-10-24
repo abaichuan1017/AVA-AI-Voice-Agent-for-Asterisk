@@ -181,10 +181,24 @@ re-upgrade compatibility. Browser checks use an isolated sample database, not vo
   zero active calls at the observed checkpoints. No calls were originated for testing.
 - Admin health, nested-route serving, default mascot assets and unauthenticated API
   rejection passed. Startup completed without error/traceback/critical log entries.
-  The deployed login page loads in the browser. **Authenticated live Agents UI
-  acceptance remains pending an operator sign-in**; local browser tests do not
-  substitute for that final check. No live agent was created or edited for testing.
+  After operator sign-in, live browser checks passed for all 15 cards, search by
+  name/tool, no-results state, status/engine filters, card/list views, the Tools
+  deep link, Calendly appointment permissions, all four settings sections, the
+  female avatar preview and Keep editing/Discard navigation protection. Discard
+  retained the original male fallback. At 21:29 UTC, all 15 saved agent rows and
+  configuration hashes still matched the backup; engine IDs/start times/config
+  remained unchanged. No live agent was created, saved or deleted for testing.
+  Image save/reload/remove persistence was exercised against the isolated local
+  database and image compatibility copy, not by modifying live agents.
+- Observed upgrade caveats: an already-open tab displayed the old workspace until
+  a normal refresh; authentication survived that refresh. The tool catalog took
+  several seconds to populate and briefly showed zero selections/"No in-call
+  tools available" before the existing two Calendly validation selections and
+  appointment permissions appeared. Wait for the catalog before interpreting its
+  counts; this transient state does not mean settings were cleared. The narrow
+  in-app browser is easier to use with the existing sidebar collapsed.
 - This is a detached staging candidate, not a merged release. Use the recorded
   Compose deployment/rollback commands for this candidate; do not use the general
-  Updates page to switch revisions during acceptance. Keep the PR draft until live
-  UI acceptance and the final repository review gate are complete.
+  Updates page to switch revisions during acceptance. Staging is available for
+  operator review; keep the PR draft until operator acceptance, then freeze and
+  run the final repository CI/review gate before merge.
