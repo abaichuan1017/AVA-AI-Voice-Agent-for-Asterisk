@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Testing Library user-event to 14.6.8, and PostCSS to 8.5.31. Retain the current
   React Refresh plugin pending the separate ESLint migration. Keep Admin Local AI
   WebSocket connections direct when environment or system proxies are configured.
+  Align the standalone backend image and setup prerequisite with Python 3.11.
 
 - **Dependencies:** update the Admin frontend follow-redirects lockfile to 1.16.1,
   engine aiohttp to 3.14.4, and Admin FastAPI/Pydantic to 0.143.3/2.14.1.
