@@ -2495,7 +2495,7 @@ async def get_local_server_status():
         if running:
             try:
                 ws_url = os.getenv("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
-                async with websockets.connect(ws_url, open_timeout=5) as ws:
+                async with websockets.connect(ws_url, open_timeout=5, proxy=None) as ws:
                     auth_token = (os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip()
                     if auth_token:
                         await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
@@ -2588,7 +2588,7 @@ async def switch_local_model(request: ModelSwitchRequest):
     
     # Send switch command to local AI server via WebSocket
     try:
-        async with websockets.connect("ws://127.0.0.1:8765", ping_interval=None) as ws:
+        async with websockets.connect("ws://127.0.0.1:8765", ping_interval=None, proxy=None) as ws:
             auth_token = (os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip()
             if auth_token:
                 await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
