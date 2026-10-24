@@ -1,0 +1,125 @@
+"""Exercise private backup contents without a deployment or external services."""
+import os
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+HELPER = ROOT / "cli/cmd/agent/integration_backup.py"
+
+
+def run_backup(root, destination=None):
+    """Invoke the shipped helper as a process with isolated configuration."""
+    environment = dict(os.environ)
+    for name in ("CALENDLY_DB_PATH", "CALENDLY_TOKEN_PATH"):
+        environment.pop(name, None)
+    return subprocess.run(
+        [sys.executable, str(HELPER), str(root), str(destination or root / "backup")],
+        env=environment, capture_output=True, text=True, timeout=40,
+    )
+
+
+def test_recovery_and_cli_embed_identical_backup_logic():
+    script = (ROOT / "scripts/update-recover.sh").read_text()
+    embedded = script.split("<<'INTEGRATION_BACKUP_PY'\n", 1)[1].split("\nINTEGRATION_BACKUP_PY", 1)[0]
+    assert embedded == HELPER.read_text().rstrip()
+
+
+def test_absent_integrations_are_optional(tmp_path):
+    assert run_backup(tmp_path).returncode == 0
+    assert list((tmp_path / "backup").iterdir()) == []
+
+
+def test_live_wal_snapshot_and_private_credentials(tmp_path):
+    secrets = tmp_path / "secrets/providers/example"
+    secrets.mkdir(parents=True)
+    (secrets / "api-key").write_bytes(b"synthetic-key\x00")
+    token = tmp_path / "secrets/calendly-default-token.json"
+    token.write_text('{"token":"synthetic"}')
+    journal = tmp_path / "data/operator/calendly.db"
+    journal.parent.mkdir(parents=True)
+    source = sqlite3.connect(journal)
+    try:
+        source.execute("PRAGMA journal_mode=WAL")
+        source.execute("CREATE TABLE attempts (state TEXT)")
+        source.execute("INSERT INTO attempts VALUES ('uncertain')")
+        source.commit()
+        assert Path(str(journal) + "-wal").stat().st_size > 0
+        assert run_backup(tmp_path).returncode == 0
+        backup = tmp_path / "backup"
+        with sqlite3.connect(backup / "data/operator/calendly.db") as copied:
+            assert copied.execute("SELECT state FROM attempts").fetchall() == [("uncertain",)]
+            assert copied.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert (backup / token.relative_to(tmp_path)).read_bytes() == token.read_bytes()
+        assert (backup / "secrets/providers/example/api-key").read_bytes() == b"synthetic-key\x00"
+        assert backup.stat().st_mode & 0o777 == 0o700
+        for path in backup.rglob("*"):
+            if path.is_file():
+                assert path.stat().st_mode & 0o777 == 0o600
+        assert not list(backup.rglob("*-wal"))
+    finally:
+        source.close()
+
+
+@pytest.mark.parametrize("value", ["/elsewhere/journal.db", "../journal.db", "$CUSTOM/journal.db"])
+def test_unmapped_paths_fail_closed(tmp_path, value):
+    (tmp_path / ".env").write_text(f'CALENDLY_DB_PATH="{value}"\n')
+    assert run_backup(tmp_path).returncode != 0
+
+
+def test_supported_container_paths_and_encoded_filename(tmp_path):
+    journal = tmp_path / "data/custom #journal.db"
+    journal.parent.mkdir()
+    with sqlite3.connect(journal) as source:
+        source.execute("CREATE TABLE attempts (id INTEGER)")
+    (tmp_path / ".env").write_text('CALENDLY_DB_PATH="/app/data/custom #journal.db"\n')
+    assert run_backup(tmp_path).returncode == 0
+    assert (tmp_path / "backup/data/custom #journal.db").is_file()
+
+
+def test_bad_journal_aborts_without_a_valid_looking_snapshot(tmp_path):
+    journal = tmp_path / "data/operator/calendly.db"
+    journal.parent.mkdir(parents=True)
+    journal.write_text("synthetic-invalid-journal")
+    result = run_backup(tmp_path)
+    assert result.returncode != 0
+    assert "synthetic-invalid-journal" not in result.stderr
+    assert not (tmp_path / "backup/data/operator/calendly.db").exists()
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_symlinked_secret_is_not_followed(tmp_path, broken):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    if not broken:
+        outside.write_text("synthetic-external-secret")
+    (secrets / "key").symlink_to(outside)
+    result = run_backup(tmp_path)
+    assert result.returncode != 0
+    assert "synthetic-external-secret" not in result.stdout + result.stderr
+
+
+def test_non_regular_secret_fails_without_blocking(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    os.mkfifo(secrets / "pipe")
+    assert run_backup(tmp_path).returncode != 0
+
+
+def test_symlinked_destination_is_rejected(tmp_path):
+    (tmp_path / "backup").symlink_to(tmp_path)
+    assert run_backup(tmp_path).returncode != 0
+
+
+def test_existing_backup_is_never_overwritten(tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "key").write_text("first")
+    assert run_backup(tmp_path).returncode == 0
+    (secrets / "key").write_text("second")
+    assert run_backup(tmp_path).returncode != 0
+    assert (tmp_path / "backup/secrets/key").read_text() == "first"
