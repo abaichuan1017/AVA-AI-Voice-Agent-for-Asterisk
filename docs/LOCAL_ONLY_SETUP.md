@@ -293,6 +293,11 @@ python3 scripts/check_local_server.py --remote <gpu-ip>
 
 See [CLI Tools Guide](CLI_TOOLS_GUIDE.md#agent-check---local--agent-check---remote) for full flag reference.
 
+The Admin UI connects directly to the configured Local AI WebSocket URL, including
+remote URLs. It ignores environment and system proxy settings for these connections,
+preserving the behavior used before WebSockets 17. Other HTTP clients retain their
+existing proxy behavior.
+
 ### Manual Verification (advanced)
 
 The commands below test each component individually. The server uses **WebSocket** (not HTTP), so these commands use Python with the `websockets` library (pre-installed in the container).

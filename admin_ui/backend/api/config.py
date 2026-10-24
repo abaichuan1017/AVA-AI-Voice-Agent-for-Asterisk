@@ -2038,7 +2038,7 @@ async def test_provider_connection(request: ProviderTestRequest):
                     return url
 
                 async def _try_connect(url: str):
-                    async with websockets.connect(url, open_timeout=5.0) as ws:
+                    async with websockets.connect(url, open_timeout=5.0, proxy=None) as ws:
                         if auth_token:
                             await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
                             response = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -2241,7 +2241,7 @@ async def test_provider_connection(request: ProviderTestRequest):
             try:
                 import websockets
                 # Try connecting to the WebSocket
-                async with websockets.connect(ws_url, open_timeout=5.0) as ws:
+                async with websockets.connect(ws_url, open_timeout=5.0, proxy=None) as ws:
                     await ws.close()
                 return {"success": True, "message": "Local AI server is reachable via WebSocket"}
             except ImportError:
