@@ -1154,6 +1154,9 @@ class Engine:
             logger.debug("Call-history store warm-up failed", exc_info=True)
         # Call-history retention cleanup (HIGH-7): only runs when retention is set
         # (CALL_HISTORY_RETENTION_DAYS>0); otherwise the loop idles and exits.
+        if not getattr(self, "_calendly_recovery_task", None):
+            from .tools.business.calendly_service import recovery_loop
+            self._calendly_recovery_task = asyncio.create_task(recovery_loop())
         try:
             if not self._retention_cleanup_task:
                 self._retention_cleanup_task = asyncio.create_task(self._retention_cleanup_loop())
@@ -4011,6 +4014,7 @@ class Engine:
             "_local_warm_task",
             "_pipeline_readiness_task",
             "_retention_cleanup_task",
+            "_calendly_recovery_task",
             "_vicidial_action_retry_task",
         ):
             try:

@@ -1025,6 +1025,9 @@ class CallHistoryStore:
                 conn = self._get_connection()
                 try:
                     cursor = conn.cursor()
+                    from src.core.calendly_store import scrub_deleted_calls
+                    rows = cursor.execute("SELECT call_id FROM call_records WHERE id = ?", (record_id,)).fetchall()
+                    scrub_deleted_calls([row[0] for row in rows])
                     cursor.execute("DELETE FROM call_records WHERE id = ?", (record_id,))
                     conn.commit()
                     return cursor.rowcount > 0
@@ -1044,6 +1047,9 @@ class CallHistoryStore:
                 conn = self._get_connection()
                 try:
                     cursor = conn.cursor()
+                    from src.core.calendly_store import scrub_deleted_calls
+                    rows = cursor.execute("SELECT call_id FROM call_records WHERE start_time < ?", (before_date.isoformat(),)).fetchall()
+                    scrub_deleted_calls([row[0] for row in rows])
                     cursor.execute(
                         "DELETE FROM call_records WHERE start_time < ?",
                         (before_date.isoformat(),)

@@ -1410,6 +1410,9 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_transfer_handoff(self) -> "AppConfig":
+        if self.tools.get("calendly_calendar") is not None:
+            from src.tools.business.calendly_client import validate_config as validate_calendly_config
+            validate_calendly_config(self.tools["calendly_calendar"])
         from src.tools.handoff_config import validate_handoff_config
         validate_handoff_config(self.tools)
         return self

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Native Calendly v1 booking with a guided single-account connection, per-agent appointment selection, explicit setup tests, durable submission/duplicate guards, and bounded positive reconciliation. Calendly handles configuration, invitations, and later booking changes; uncertain writes are never automatically resubmitted.
 - Native Pushover as a named tool in the existing pre/in/post-call workflow, with normal Agent selection, configurable descriptions/templates, masked per-tool credentials, multiple enabled user/group recipients, one shared summary per invocation, generic phase defaults with optional CRM customizations, official documentation links and explicit previews/tests.
 - Provider-backed in-call HTTP summaries with safe placeholders, failure policy, combined timeout budgets and independent generation diagnostics.
 - **Initial greeting readiness (#752):** opt-in AudioSocket/ExternalMedia streaming

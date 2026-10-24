@@ -32,6 +32,8 @@ export interface AgentToolState {
     googleCalendarKeys: string[];
     microsoftCalendarPolicy: ResourcePolicy;
     microsoftAccountKeys: string[];
+    calendlyPolicy: ResourcePolicy;
+    calendlyKeys: string[];
     voicemailMailboxPolicy: ResourcePolicy;
     voicemailMailboxKey: string;
 }
@@ -167,6 +169,8 @@ export function parseAgentConfig(agent: AgentLike | null | undefined): AgentTool
         googleCalendarKeys: googleCalendarPolicy === 'selected' || !isKnownPolicy(googleCalendarPolicy)
             ? asStrArray(googleConfig['calendar_keys']) : [],
         microsoftCalendarPolicy,
+        calendlyPolicy: parsePolicy(asObject(toolConfigs['calendly_calendar'])['appointment_policy'] ?? 'selected'),
+        calendlyKeys: asStrArray(asObject(toolConfigs['calendly_calendar'])['appointment_keys']),
         microsoftAccountKeys: microsoftCalendarPolicy === 'selected' || !isKnownPolicy(microsoftCalendarPolicy)
             ? asStrArray(microsoftConfig['account_keys']) : [],
         voicemailMailboxPolicy,
@@ -204,6 +208,12 @@ export function serializeAgentConfig(state: AgentToolState): SerializedAgentConf
     else delete extra['no_input'];
 
     const toolConfigs: Record<string, unknown> = {};
+    if (state.calendlyPolicy && state.calendlyPolicy !== 'inherit' && (state.inCallTools.includes('calendly_calendar') || state.calendlyKeys.length || state.calendlyPolicy !== 'selected')) {
+        toolConfigs.calendly_calendar = {
+            appointment_policy: state.calendlyPolicy,
+            appointment_keys: state.calendlyPolicy === 'selected' ? [...new Set(state.calendlyKeys)] : [],
+        };
+    }
     if (state.transferDestinationPolicy !== 'inherit') {
         toolConfigs.transfer = {
             destination_policy: state.transferDestinationPolicy,

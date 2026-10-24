@@ -1,0 +1,45 @@
+# Calendly appointment booking
+
+Calendly v1 connects one operator-owned Calendly user to self-hosted AVA Core. Agents can offer times and book existing supported one-to-one appointments. Calendly owns calendar connections, appointment settings, invitations, and subsequent cancellation/rescheduling.
+
+## Setup
+
+1. Open **Tools → Calendly** in the authenticated Admin UI, preferably through HTTPS or an encrypted SSH tunnel. Do not paste a token into a chat, prompt, YAML, or support ticket.
+2. Create a personal access token in Calendly's **Integrations → API & Webhooks**. Select `users:read`, `event_types:read`, `availability:read`, and `scheduled_events:write` (which includes scheduled-event read). Direct booking requires Standard or higher; a new trial has a much smaller booking allowance.
+3. Enter the token, **Verify connection**, then **Save connection**. Verification is read-only. Saving pauses scheduling until you explicitly enable it. Invalid replacements leave the existing token intact; an interrupted file replacement leaves scheduling disabled.
+4. **Refresh from Calendly**, confirm that the intended types are one host/one invitee, and select supported appointments. Configure Google/Microsoft calendar connections, conflict calendars, destinations, notifications, and reminders in Calendly.
+5. Enable the tool, save the appointment selection, and use the Tools page's save/apply action. In **Agents → Edit → Tools**, enable `calendly_calendar` and select the permitted appointment types. Existing agents are not automatically assigned this tool.
+6. Enable booking in the connection panel. Run the explicit setup test with your own recipient. It creates a real appointment and can send a real invitation; Verify, Save, Refresh, and Apply do not.
+7. Check the actual calendar destination and invitation, inspect the management links, and **Verify tracking readback**. Record the operator checks and clean up the test through Calendly. Test a real call separately before enabling an agent for callers.
+
+Conference kinds (Google Meet, Teams, Zoom) need a successful explicit setup qualification before normal call booking. Other supported locations are none, one fixed physical/custom location, or a fixed inbound host phone. Unsupported entries explain their limitation. Group/pooled/paid/variable-duration appointments, required multi-select questions, multiple locations, guests, and SMS opt-in are excluded initially.
+
+## Caller behavior
+
+The tool has three actions: `list_appointment_types`, `get_available_slots`, and `create_booking`. Action values are arguments to `calendly_calendar`, not separate functions.
+
+The agent asks for purpose, timezone, name, exact invitation email, and required appointment questions. It reads back the email/domain, recaps appointment/date/time/timezone/duration/location/recipient, and obtains approval. A changed detail requires fresh approval. The backend accepts only its own short-lived slot references and rechecks current availability and metadata before booking.
+
+At most one confirmed or uncertain booking operation is permitted per call. Repeated tool calls return the retained original result. They do not change its time or recipient. Later changes, including requests made in the same conversation after booking, use Calendly's confirmation link or staff. An error checking availability is not a busy slot. Booking success is not proof of delivered email or accepted RSVP.
+
+## Pending submissions
+
+AVA commits its submission journal before one booking POST. It never automatically repeats a POST after a lost response, timeout, server error, cancellation, or process restart.
+
+When setup has qualified tracking readback, AVA can search a narrow host/recipient/time window and confirm exactly one matching opaque attempt marker. Missing, incomplete, ambiguous, changed, or inaccessible records require staff. No result is never proof that a previous submission failed. There is no exactly-once claim against Calendly or other booking applications.
+
+Use **Pending requests and setup results** to inspect retained outcomes, run a bounded status check, open Calendly, or record external handling. An external-resolution note remains operator evidence; it does not make a fresh submission from the old call safe. Call History also shows the recorded booking outcome and a link to recovery. It is not a continuously synchronized booking dashboard.
+
+**Disable booking now** prevents new submissions from active as well as new calls, while retaining credentials for read-only recovery. A previously admitted request may finish. **Disconnect** removes the local token and closes scheduling; it never cancels existing appointments or deletes pending history. A different-account reconnect invalidates old resource assignments and proposals.
+
+## Storage, privacy, and recovery
+
+The token lives in `secrets/calendly-default-token.json`; the integration journal lives in `data/operator/calendly.db`. Both services use the existing shared mounts and intended UID 1000, with restricted file access. No token is returned by the connection API or ordinary config reads. Neither file belongs in Git or a public support bundle.
+
+SQLite WAL/FULL synchronization and transactional claims provide local submission durability. A missing, locked, unreadable, incompatible or failed journal stops booking rather than falling back to memory. Private lookup details expire after 30 days, or earlier configured positive Call History retention; call-history purge scrubs linked details while preserving replay barriers. Expired details require manual Calendly investigation.
+
+Back up SQLite with its backup API or a consistent WAL-aware procedure. Preserve the journal through rollback. Before restoring an older backup, pause booking and review remote submissions after the backup; local restore cannot prove that they never occurred. Remove Calendly tool and agent-policy references before downgrading to code that does not recognize them. Do not delete real appointments or replay attempts during rollback.
+
+Troubleshooting codes are diagnostics for operators, not scripts for the caller: `connection_disabled`, `credential_permissions`, `appointment_setup_incomplete`, `conference_not_qualified`, `proposal_changed_reconfirm`, `booking_capacity_busy`, `discovery_not_qualified`, `search_incomplete`, and `lookup_details_expired` all have fail-closed behavior. Resolve setup or verify the retained attempt before another booking.
+
+See the [implementation and acceptance plan](CALENDLY_BOOKING_V1_IMPLEMENTATION_PLAN.md) for exact lifecycle, bounds, tests, and deliberately deferred features. Public API references: [authentication](https://developer.calendly.com/docs/authentication/overview), [booking](https://developer.calendly.com/api-docs/calendly-api/scheduled-events/create-event-invitee), [rate limits](https://developer.calendly.com/api-docs/overview/rate-limits).

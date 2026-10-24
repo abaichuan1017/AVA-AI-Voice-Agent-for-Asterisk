@@ -50,13 +50,16 @@ TOOL_CHECK_EXTENSION_KEYS: Tuple[str, ...] = (
     "device_states",
 )
 
-CALENDAR_TOOL_NAMES = frozenset({"google_calendar", "microsoft_calendar"})
+CALENDAR_TOOL_NAMES = frozenset({"google_calendar", "microsoft_calendar", "calendly_calendar"})
 
 # Calendar tools intentionally return structured data that the model needs to
 # answer the caller.  Keep this allowlist shared by every provider adapter so
 # OpenAI, Google Live, Grok, and Deepgram do not diverge at the final response
 # boundary.  Unknown/internal fields remain filtered out.
 TOOL_CALENDAR_KEYS: Tuple[str, ...] = (
+    "code", "appointment_types", "appointment_key", "appointment_name", "duration_minutes",
+    "timezone", "location_summary", "questions", "start_datetime", "end_datetime",
+    "search_start", "search_end", "attempt_reference",
     "status",
     "message",
     "error",
@@ -181,7 +184,7 @@ def sanitize_tool_result_for_json_string(
         if "message" not in payload:
             payload["message"] = str(result.get("message") or "")
         # Keep a compact structured payload when available (helps follow-up reasoning).
-        if "result" in result and "result" not in payload:
+        if "result" in result and "result" not in payload and normalized_tool_name != "calendly_calendar":
             payload["result"] = _safe_jsonable(result.get("result"), max_depth=3, max_items=20)
 
         if normalized_tool_name in CALENDAR_TOOL_NAMES and isinstance(result.get("events"), (list, tuple)):

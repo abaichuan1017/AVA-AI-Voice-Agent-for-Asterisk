@@ -650,6 +650,9 @@ Tool Definitions:
         except ImportError as e:
             logger.warning(f"Could not import MicrosoftCalendarTool: {e}")
         
+        from src.tools.business.calendly_calendar import CalendlyCalendarTool
+        self.register(CalendlyCalendarTool)
+
         # Future tools will be registered here:
         # from src.tools.telephony.voicemail import SendToVoicemailTool
         # self.register(SendToVoicemailTool)

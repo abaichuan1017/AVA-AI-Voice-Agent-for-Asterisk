@@ -91,6 +91,7 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent }
     const [transferDestinations, setTransferDestinations] = useState<TransferDestination[]>([]);
     const [googleCalendars, setGoogleCalendars] = useState<AgentResourceOption[]>([]);
     const [microsoftAccounts, setMicrosoftAccounts] = useState<AgentResourceOption[]>([]);
+    const [calendlyAppointments, setCalendlyAppointments] = useState<AgentResourceOption[]>([]);
     const [voicemailMailboxes, setVoicemailMailboxes] = useState<AgentResourceOption[]>([]);
     // Tool-reference highlighting for the prompt: detect every catalog tool name,
     // colour-code by in-call status for this agent.
@@ -226,6 +227,7 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent }
                     : []));
 
             const microsoft = asRecord(toolsBlock.microsoft_calendar);
+            setCalendlyAppointments(resourceOptions(asRecord(asRecord(toolsBlock.calendly_calendar).appointments), ['duration']));
             const microsoftInventory = asRecord(microsoft.accounts);
             setMicrosoftAccounts(Object.keys(microsoftInventory).length
                 ? resourceOptions(microsoftInventory, ['user_principal_name', 'calendar_id', 'timezone'])
@@ -862,6 +864,7 @@ const AgentForm: React.FC<AgentFormProps> = ({ isOpen, onClose, onSaved, agent }
                     transferDestinations={transferDestinations}
                     googleCalendars={googleCalendars}
                     microsoftAccounts={microsoftAccounts}
+                    calendlyAppointments={calendlyAppointments}
                     voicemailMailboxes={voicemailMailboxes}
                 />
 

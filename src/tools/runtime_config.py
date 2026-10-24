@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 TRANSFER_SCOPE = "transfer"
 GOOGLE_CALENDAR_SCOPE = "google_calendar"
 MICROSOFT_CALENDAR_SCOPE = "microsoft_calendar"
+CALENDLY_SCOPE = "calendly_calendar"
 VOICEMAIL_SCOPE = "voicemail"
 RESOURCE_POLICIES = frozenset({"inherit", "selected", "none"})
 TRANSFER_POLICIES = RESOURCE_POLICIES
@@ -131,6 +132,7 @@ def normalize_agent_tool_configs(value: Any) -> Dict[str, Any]:
         TRANSFER_SCOPE,
         GOOGLE_CALENDAR_SCOPE,
         MICROSOFT_CALENDAR_SCOPE,
+        CALENDLY_SCOPE,
         VOICEMAIL_SCOPE,
     }
     unknown_scopes = sorted(set(value) - supported_scopes)
@@ -167,6 +169,13 @@ def normalize_agent_tool_configs(value: Any) -> Dict[str, Any]:
             keys_field="account_keys",
         )
 
+    raw_calendly = value.get(CALENDLY_SCOPE)
+    if raw_calendly is not None:
+        result[CALENDLY_SCOPE] = _normalize_multi_resource_scope(
+            raw_calendly, scope=CALENDLY_SCOPE,
+            policy_field="appointment_policy", keys_field="appointment_keys",
+        )
+
     raw_voicemail = value.get(VOICEMAIL_SCOPE)
     if raw_voicemail is not None:
         result[VOICEMAIL_SCOPE] = _normalize_voicemail_scope(raw_voicemail)
@@ -182,6 +191,7 @@ def dump_agent_tool_configs(value: Any) -> Optional[str]:
         TRANSFER_SCOPE: "destination_policy",
         GOOGLE_CALENDAR_SCOPE: "calendar_policy",
         MICROSOFT_CALENDAR_SCOPE: "account_policy",
+        CALENDLY_SCOPE: "appointment_policy",
         VOICEMAIL_SCOPE: "mailbox_policy",
     }
     stored = {
@@ -448,6 +458,11 @@ def resolve_agent_tool_config(
             keys_field="account_keys",
             inventory_field="accounts",
             selection_field="selected_accounts",
+        ),
+        CALENDLY_SCOPE: _apply_multi_resource_policy(
+            tools, policies, scope=CALENDLY_SCOPE, tool_name=CALENDLY_SCOPE,
+            policy_field="appointment_policy", keys_field="appointment_keys",
+            inventory_field="appointments", selection_field="selected_appointments",
         ),
         VOICEMAIL_SCOPE: _apply_voicemail_policy(tools, policies),
     }

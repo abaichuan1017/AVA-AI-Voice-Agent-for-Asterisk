@@ -11,6 +11,7 @@ import { Modal } from '../ui/Modal';
 import { EmailTemplateModal } from './EmailTemplateModal';
 import HelpTooltip from '../ui/HelpTooltip';
 import { MicrosoftBookingSettings } from './MicrosoftBookingSettings';
+import CalendlyToolForm from './CalendlyToolForm';
 
 interface ToolFormProps {
     // Keep the form mounted while navigating so OAuth and local field drafts survive.
@@ -1409,6 +1410,11 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
 
     return (
         <div className="space-y-8">
+            {section === 'calendly_calendar' && <CalendlyToolForm
+                config={config.calendly_calendar || {}}
+                onChange={value => onChange({ ...config, calendly_calendar: value })}
+                onSave={async value => { if (onSaveNow) await onSaveNow({ ...config, calendly_calendar: value }); }}
+            />}
             {/* AI Identity & General Settings */}
             <div hidden={section !== undefined && section !== 'defaults'} className="space-y-4 border-b border-border pb-6">
                 <h3 className="text-lg font-semibold text-primary">General Settings</h3>
