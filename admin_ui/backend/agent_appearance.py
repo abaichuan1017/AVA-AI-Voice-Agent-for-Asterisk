@@ -28,7 +28,7 @@ def normalize_avatar(value: str | None) -> str | None:
             raise ValueError("Avatar must be 2 MB or smaller")
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(raw)) as source:
+            with Image.open(io.BytesIO(raw), formats=[formats[header]]) as source:
                 if source.format != formats[header]:
                     raise ValueError("Avatar type does not match its contents")
                 if source.width * source.height > MAX_PIXELS:

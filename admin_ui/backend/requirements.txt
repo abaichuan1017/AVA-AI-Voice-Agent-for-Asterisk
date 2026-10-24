@@ -37,4 +37,4 @@ msal>=1.39.0
 portalocker>=2.8.0
 
 # Decode and normalize operator-uploaded Agent avatars.
-Pillow==12.1.1
+Pillow==13.0.0

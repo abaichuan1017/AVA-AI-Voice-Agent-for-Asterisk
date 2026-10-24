@@ -46,7 +46,7 @@ def test_rejects_unsafe_or_oversized_uploads(value):
 
 
 def test_mismatched_type_and_pixel_bomb_are_rejected():
-    with pytest.raises(ValueError, match="type does not match"):
+    with pytest.raises(ValueError, match="not a valid supported image"):
         normalize_avatar(picture().replace("image/png", "image/jpeg"))
     with pytest.raises(ValueError, match="16 million"):
         normalize_avatar(picture(size=(4001, 4000)))
