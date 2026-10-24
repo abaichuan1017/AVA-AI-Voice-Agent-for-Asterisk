@@ -1075,7 +1075,7 @@ class CallHistoryStore:
         copied to the queue. Scrub outside the history lock; remove only after
         success. Repeated/concurrent scrubs are idempotent.
         """
-        if not self._enabled:
+        if not self._enabled and not Path(self._db_path).is_file():
             return
 
         def _retry_sync():
@@ -1083,13 +1083,20 @@ class CallHistoryStore:
                 with self._lock:
                     conn = self._get_connection()
                     try:
+                        # Disabling new history collection does not revoke an
+                        # already committed erasure obligation. Older/disabled
+                        # stores without this queue have no work to retry here.
+                        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pending_calendly_purges'").fetchone():
+                            return
                         calls = [r[0] for r in conn.execute("SELECT call_id FROM pending_calendly_purges LIMIT 100")]
                     finally:
                         conn.close()
                 if not calls:
                     return
                 from src.core.calendly_store import scrub_deleted_calls
-                scrub_deleted_calls(calls)
+                if not scrub_deleted_calls(calls):
+                    logger.warning("Calendly erasure deferred; journal absent and retry retained")
+                    return
                 with self._lock:
                     conn = self._get_connection()
                     try:

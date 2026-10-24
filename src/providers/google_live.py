@@ -2137,6 +2137,8 @@ class GoogleLiveProvider(AIProviderInterface):
             audio_b64: Base64-encoded PCM16 audio
             mime_type: inlineData mimeType (may include `rate=...`)
         """
+        epoch = self._output_prefill_epoch
+        response_id = self._audio_response_id
         try:
             # A terminal tool call after Gemini 3.8's spoken farewell can
             # produce an additional model continuation. Keep already queued
@@ -2170,6 +2172,12 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     latency_ms=round(turn_latency_ms, 1),
                 )
+
+            # Session-store latency tracking can yield across an interruption
+            # or a newer response. Never bless an old chunk with new markers.
+            if (epoch != self._output_prefill_epoch or response_id != self._audio_response_id
+                    or self._closing or self._closed):
+                return
             
             _GOOGLE_LIVE_AUDIO_RECEIVED.inc(len(pcm16_provider))
 
@@ -2245,17 +2253,18 @@ class GoogleLiveProvider(AIProviderInterface):
                 self._output_prefill_ready = not self.config.playback_prefill_ms
                 if self.long_audio_playback_enabled:
                     self._audio_response_id += 1
+                response_id = self._audio_response_id
             
             event = {
                 "type": "AgentAudio", "data": output_audio, "call_id": self._call_id,
                 "encoding": target_encoding, "sample_rate": target_rate,
                 **({"audio_response_id": self._audio_response_id} if self.long_audio_playback_enabled else {}),
             }
-            epoch = self._output_prefill_epoch
             async with self._output_prefill_lock:
                 # Immediate audio must wait behind reserve delivery too. An
                 # interruption/close can invalidate a chunk while it waits.
-                if epoch != self._output_prefill_epoch or self._closing or self._closed:
+                if (epoch != self._output_prefill_epoch or response_id != self._audio_response_id
+                        or self._closing or self._closed):
                     return
                 if not self._output_prefill_ready:
                     self._output_prefill.append(event)

@@ -169,7 +169,7 @@ export function parseAgentConfig(agent: AgentLike | null | undefined): AgentTool
         googleCalendarKeys: googleCalendarPolicy === 'selected' || !isKnownPolicy(googleCalendarPolicy)
             ? asStrArray(googleConfig['calendar_keys']) : [],
         microsoftCalendarPolicy,
-        calendlyPolicy: parsePolicy(asObject(toolConfigs['calendly_calendar'])['appointment_policy'] ?? 'selected'),
+        calendlyPolicy: parsePolicy(asObject(toolConfigs['calendly_calendar'])['appointment_policy'] ?? 'inherit'),
         calendlyKeys: asStrArray(asObject(toolConfigs['calendly_calendar'])['appointment_keys']),
         microsoftAccountKeys: microsoftCalendarPolicy === 'selected' || !isKnownPolicy(microsoftCalendarPolicy)
             ? asStrArray(microsoftConfig['account_keys']) : [],

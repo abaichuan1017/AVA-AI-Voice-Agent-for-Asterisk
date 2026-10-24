@@ -387,13 +387,15 @@ async def test_new_call_can_book_positively_cancelled_duplicate_without_replayin
 
 @pytest.mark.parametrize('fault', ['active_event', 'active_invitee', 'wrong_host', 'wrong_type', 'wrong_time',
                                   'wrong_duration', 'wrong_marker', 'rescheduled', 'wrong_invitee',
-                                  'wrong_event', 'missing_details', 'uncertain', 'not_found'])
+                                  'wrong_event', 'missing_details', 'uncertain', 'not_found', 'null_membership', 'scalar_membership'])
 async def test_unproven_cancellation_never_releases_duplicate(setup, fault):
     store, service, fake, cfg = setup
     old = await cancelled_test(setup)
     if fault == 'active_event': fake.event['status'] = 'active'
     if fault == 'active_invitee': fake.invitee['status'] = 'active'
     if fault == 'wrong_host': fake.event['event_memberships'] = [{'user': USER + '-other'}]
+    if fault == 'null_membership': fake.event['event_memberships'] = [None]
+    if fault == 'scalar_membership': fake.event['event_memberships'] = ['invalid']
     if fault == 'wrong_type': fake.event['event_type'] = TYPE + '-other'
     if fault == 'wrong_time': fake.event['start_time'] = (datetime.fromisoformat(fake.start)+timedelta(minutes=1)).isoformat()
     if fault == 'wrong_duration': fake.event['end_time'] = fake.start

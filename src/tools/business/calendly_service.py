@@ -306,7 +306,7 @@ class CalendlyService:
                     or (instant(event.get("end_time", "")) - instant(event["start_time"])).total_seconds() != lookup["duration"] * 60
                     or not any(m.get("user") == conn["user"] for m in event.get("event_memberships", []))):
                 return False
-        except (CalendlyError, KeyError, TypeError):
+        except (CalendlyError, KeyError, TypeError, AttributeError):
             return False
         return await asyncio.to_thread(self.store.release_cancelled_duplicate, row)
 

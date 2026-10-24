@@ -304,8 +304,10 @@ class CalendlyStore:
                 db.execute("UPDATE attempts SET private='{}',public='{}' WHERE operation=? AND (private!='{}' OR public!='{}')", ("call:" + call,))
 
 
-def scrub_deleted_calls(call_ids: list[str]):
-    """History purge removes private lookup details but never replay barriers."""
+def scrub_deleted_calls(call_ids: list[str]) -> bool:
+    """Acknowledge erasure only after accessing the journal; keep replay barriers."""
     path = Path(os.getenv("CALENDLY_DB_PATH", "/app/data/operator/calendly.db"))
     if path.exists():
         CalendlyStore().cleanup(call_ids)
+        return True
+    return False

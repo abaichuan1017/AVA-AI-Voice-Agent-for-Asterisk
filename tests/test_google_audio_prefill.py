@@ -3,6 +3,8 @@ import asyncio
 import base64
 import json
 import struct
+import time
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -207,3 +209,29 @@ async def test_local_interruption_discards_reserve_and_late_generation_chunks():
     audio = [c.args[0] for c in callback.await_args_list if c.args[0]['type'] == 'AgentAudio']
     assert len(audio) == 1 and audio[0]['audio_response_id'] > old_response
     assert struct.unpack('<h', audio[0]['data'][:2])[0] == 3
+
+
+@pytest.mark.parametrize('boundary', ['local', 'server', 'new_response'])
+async def test_latency_tracking_await_cannot_reauthorize_stale_audio(boundary):
+    entered, release = asyncio.Event(), asyncio.Event()
+    callback = AsyncMock()
+    p = provider(callback)
+    p.config.long_audio_playback_enabled = True
+    p._in_audio_burst = True
+    p._audio_response_id = 1
+    p._turn_start_time = time.time() - .1
+    async def get_session(_):
+        entered.set()
+        await release.wait()
+        return SimpleNamespace(turn_latencies_ms=[])
+    p._session_store = SimpleNamespace(get_by_call_id=get_session, upsert_call=AsyncMock())
+    waiting = asyncio.create_task(chunk(p, sample=2))
+    await entered.wait()
+    if boundary == 'local': await p.handle_local_barge_in()
+    elif boundary == 'server': await p._handle_server_content({'serverContent': {'interrupted': True}})
+    else: p._audio_response_id += 1
+    release.set()
+    await waiting
+    await p._flush_output_prefill()
+    assert not p._output_prefill
+    assert not any(c.args[0]['type'] == 'AgentAudio' for c in callback.await_args_list)

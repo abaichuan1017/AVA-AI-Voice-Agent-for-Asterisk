@@ -51,7 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Save & Apply** action. Transfer routing/timing settings use a disclosure.
 
 ### Fixed
-- Preserve Google buffered-audio order across concurrent flushes and local interruption, reject stale turn boundaries before releasing a new reserve, and pace partial speech tails after the filler idle cutoff so terminal audio drain can finish. Calendly recovery now handles malformed readback safely, null appointment selections consistently, and history erasure through a durable retry queue; setup callbacks preserve the latest tool draft and recovery views expose matching request references.
+- Preserve Google buffered-audio order across concurrent flushes and interruption, reject stale chunks across latency-tracking awaits, and pace partial speech tails after the filler idle cutoff so terminal audio drain can finish.
+- Keep Calendly erasure work durable through journal absence and disabled history collection; handle malformed readback safely, display Agent access defaults consistently with runtime, preserve the latest UI draft after async setup, and expose matching recovery request references.
 
 - **Onward transfers preserve the caller** ([#699](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/issues/699)):
   after an accepted AVA attended handoff, adopt Asterisk's replacement human leg

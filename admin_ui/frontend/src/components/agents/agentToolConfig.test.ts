@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 
 import { parseAgentConfig, serializeAgentConfig } from './agentToolConfig';
 
+describe('Calendly appointment policy matches runtime defaults', () => {
+    it('shows and preserves inherited access when no policy is stored', () => {
+        const state = parseAgentConfig({ tools_json: JSON.stringify(['calendly_calendar']) });
+        expect(state.calendlyPolicy).toBe('inherit');
+        expect(serializeAgentConfig(state).tool_configs_json).toBeNull();
+        expect(parseAgentConfig(serializeAgentConfig(state)).calendlyPolicy).toBe('inherit');
+    });
+
+    it.each(['none', 'selected'])('preserves explicit %s denial instead of inheriting', policy => {
+        const state = parseAgentConfig({ tools_json: JSON.stringify(['calendly_calendar']),
+            tool_configs_json: JSON.stringify({ calendly_calendar: { appointment_policy: policy, appointment_keys: [] } }) });
+        expect(state.calendlyPolicy).toBe(policy);
+        expect(state.calendlyKeys).toEqual([]);
+        expect(JSON.parse(serializeAgentConfig(state).tool_configs_json || '{}').calendly_calendar)
+            .toEqual({ appointment_policy: policy, appointment_keys: [] });
+    });
+});
+
 
 describe('per-agent hangup marker policy', () => {
     it('round-trips an extend policy through the first-class column', () => {
