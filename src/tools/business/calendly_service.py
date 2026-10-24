@@ -155,9 +155,9 @@ class CalendlyService:
         if not isinstance(rows, list):
             raise CalendlyError("invalid_response")
         output = []
-        for row in rows:
+        for row in sorted(rows, key=lambda row: instant(row.get("start_time", ""))):
             when = instant(row.get("start_time", ""))
-            if row.get("status") != "available" or row.get("invitees_remaining") != 1 or not a <= when <= b:
+            if row.get("status") != "available" or row.get("invitees_remaining") != 1 or not a <= when < b:
                 continue
             if len(output) >= 10:
                 break

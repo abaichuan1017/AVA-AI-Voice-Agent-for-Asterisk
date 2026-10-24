@@ -453,3 +453,54 @@ def test_provider_structured_slots_survive():
     result = sanitize_tool_result_for_json_string({"status": "success", "slots": [{"slot_reference": "safe", "start_datetime": "2030-01-01T12:00:00Z"}], "questions": [{"question": "Purpose?"}], "private": {"token": "secret"}}, tool_name="calendly_calendar")
     assert result["slots"][0]["slot_reference"] == "safe"
     assert "private" not in result
+
+
+async def test_native_next_availability_defaults_and_correctable_inputs(setup, monkeypatch):
+    from src.tools.business import calendly_calendar as native
+    from src.tools.context import ToolExecutionContext
+    store, service, fake, cfg = setup
+    monkeypatch.setattr(native, 'CalendlyStore', lambda: store)
+    monkeypatch.setattr(native, 'CalendlyService', lambda _: service)
+    context = ToolExecutionContext(call_id='next', config={'tools': {'calendly_calendar': cfg}})
+    tool = native.CalendlyCalendarTool()
+    params = {'action': 'get_available_slots', 'appointment_key': 'consultation'}
+    missing_timezone = await tool.execute(params, context)
+    assert missing_timezone['code'] == 'invalid_timezone'
+    assert 'timezone' in missing_timezone['message']
+    assert not fake.calls
+    before = datetime.now(timezone.utc)
+    result = await tool.execute({**params, 'timezone': 'America/Los_Angeles'}, context)
+    assert result['status'] == 'success' and len(result['slots']) == 1
+    a, b = map(datetime.fromisoformat, [result['search_start'], result['search_end']])
+    assert before + timedelta(seconds=59) < a < datetime.now(timezone.utc) + timedelta(seconds=61)
+    assert b - a == timedelta(days=7)
+    explicit = (before + timedelta(days=1)).isoformat()
+    result = await tool.execute({**params, 'timezone': 'America/Los_Angeles', 'start_datetime': explicit}, context)
+    assert result['search_start'] == explicit
+    assert datetime.fromisoformat(result['search_end']) - datetime.fromisoformat(explicit) == timedelta(days=7)
+    for changes, code in [({'end_datetime': explicit}, 'search_start_required'),
+                          ({'start_datetime': 'not-a-date'}, 'invalid_datetime'),
+                          ({'start_datetime': (before-timedelta(days=1)).isoformat()}, 'invalid_search_window')]:
+        invalid = await tool.execute({**params, 'timezone': 'America/Los_Angeles', **changes}, context)
+        assert invalid['status'] == 'error' and invalid['code'] == code
+        assert 'No booking was submitted' in invalid['message']
+    invented = await tool.execute({'action': 'create_booking', 'slot_reference': fake.start}, context)
+    assert invented['code'] == 'proposal_expired'
+    assert 'exact returned slot_reference' in invented['message']
+    assert fake.posts == 0 and store.prior('call:next') is None
+
+
+async def test_next_availability_sorts_before_limiting_and_honors_window(setup):
+    _, service, fake, cfg = setup
+    original = fake.request
+    start = datetime.now(timezone.utc) + timedelta(minutes=1)
+    end = start + timedelta(days=7)
+    async def request(method, path, **kwargs):
+        if path == '/event_type_available_times':
+            times = [end, start-timedelta(seconds=1)] + [start+timedelta(hours=i) for i in range(12, 0, -1)]
+            return {'collection': [{'status': 'available', 'invitees_remaining': 1, 'start_time': t.isoformat()} for t in times]}
+        return await original(method, path, **kwargs)
+    fake.request = request
+    result = await service.slots(cfg, 'call:earliest', 'consultation', start.isoformat(), end.isoformat(), 'America/Los_Angeles')
+    assert [datetime.fromisoformat(row['start_datetime']).astimezone(timezone.utc) for row in result['slots']] == [start+timedelta(hours=i) for i in range(1, 11)]
+    assert result['slots_truncated'] is True and fake.posts == 0

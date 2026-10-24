@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from src.core.calendly_store import CalendlyStore
 from src.tools.base import Tool, ToolCategory, ToolDefinition
 from src.tools.context import resolve_scoped_tool_config
-from src.tools.business.calendly_client import CalendlyError
+from src.tools.business.calendly_client import CalendlyError, instant
 from src.tools.business.calendly_service import CalendlyService
 
 logger = logging.getLogger(__name__)
@@ -17,9 +17,11 @@ class CalendlyCalendarTool(Tool):
     def definition(self):
         props = {
             "action": {"type": "string", "enum": ["list_appointment_types", "get_available_slots", "create_booking"]},
-            "appointment_key": {"type": "string"}, "start_datetime": {"type": "string"},
-            "end_datetime": {"type": "string"}, "timezone": {"type": "string", "description": "Caller-confirmed IANA timezone"},
-            "slot_reference": {"type": "string"}, "name": {"type": "string"}, "email": {"type": "string"},
+            "appointment_key": {"type": "string", "description": "Exact key returned by list_appointment_types."},
+            "start_datetime": {"type": "string", "description": "Availability window start, ISO 8601 with UTC offset. For next available, omit both dates to search the next seven days using the server clock."},
+            "end_datetime": {"type": "string", "description": "Exclusive availability window end, ISO 8601 with UTC offset. Defaults to seven days after the start. For a specific local day, send local midnight to next midnight with the correct offsets."},
+            "timezone": {"type": "string", "description": "Required caller-confirmed IANA timezone, e.g. America/Los_Angeles."},
+            "slot_reference": {"type": "string", "description": "Exact opaque reference returned by get_available_slots. Never a date/time or invented value. Select a returned slot before create_booking."}, "name": {"type": "string"}, "email": {"type": "string"},
             "confirmation_reference": {"type": "string", "description": "Returned by the first create_booking call. Omit to prepare a new canonical recap; include only after the caller approves that exact recap."},
             "booking_confirmed": {"type": "boolean"}, "email_confirmed": {"type": "boolean"},
             "answers": {"type": "array", "items": {"type": "object", "properties": {"position": {"type": "integer"}, "answer": {"type": "string"}}, "required": ["position", "answer"], "additionalProperties": False}},
@@ -55,8 +57,15 @@ class CalendlyCalendarTool(Tool):
             if parameters.get("action") == "get_available_slots":
                 if parameters.get("appointment_key") not in allowed:
                     raise CalendlyError("appointment_not_allowed")
-                return await service.slots(cfg, operation, parameters["appointment_key"], parameters.get("start_datetime", ""),
-                                           parameters.get("end_datetime", ""), parameters.get("timezone", ""))
+                start, end = parameters.get("start_datetime", ""), parameters.get("end_datetime", "")
+                if not start and end:
+                    raise CalendlyError("search_start_required")
+                if not start:
+                    start = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+                if not end:
+                    end = (instant(start) + timedelta(days=7)).isoformat()
+                return await service.slots(cfg, operation, parameters["appointment_key"], start,
+                                           end, parameters.get("timezone", ""))
             if parameters.get("action") == "create_booking":
                 async def active():
                     session = await context.get_session()
@@ -67,8 +76,15 @@ class CalendlyCalendarTool(Tool):
                 return await service.book(cfg, operation, parameters, active)
             raise CalendlyError("unsupported_action")
         except CalendlyError as exc:
+            messages = {
+                "invalid_timezone": "Ask for the caller's timezone, then check availability with its IANA name. For next available, omit both dates to search the next seven days. No booking was submitted.",
+                "invalid_datetime": "Correct the availability dates using ISO 8601 with UTC offsets. For next available, omit both dates to search the next seven days. No booking was submitted.",
+                "search_start_required": "Supply a search start along with the end, or omit both dates for the next seven days. No booking was submitted.",
+                "invalid_search_window": "Search a future window of at most 31 days. For next available, omit both dates for the next seven days. For a specific day use midnight to next midnight in the caller's timezone. No booking was submitted.",
+                "proposal_expired": "Check availability again and use an exact returned slot_reference; never use a date/time as a reference. Then prepare a new recap and obtain approval. No booking was submitted.",
+            }
             return {"status": "pending" if exc.uncertain else "error", "code": exc.code,
-                    "message": "Scheduling could not be confirmed. Clarify missing details or ask staff; never repeat an uncertain booking."}
+                    "message": messages.get(exc.code, "Scheduling could not be confirmed. Clarify missing details or ask staff; never repeat an uncertain booking.")}
         except (TimeoutError, OSError, ValueError):
             return {"status": "pending", "code": "scheduling_unavailable", "message": "Scheduling confirmation is unavailable. Ask staff to check before booking again."}
         except asyncio.CancelledError:
