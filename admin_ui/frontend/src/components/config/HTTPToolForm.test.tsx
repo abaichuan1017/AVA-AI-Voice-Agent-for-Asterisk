@@ -358,3 +358,13 @@ describe('HTTPToolForm editor colors', () => {
         expect(onChange).not.toHaveBeenCalled();
     });
 });
+
+
+it('offers the summary controls and failure policy for in-call HTTP tools', async () => {
+    renderForm('in_call');
+    fireEvent.click(screen.getByRole('button', { name: 'Add Tool' }));
+    fireEvent.click(screen.getByLabelText('Generate AI Summary'));
+    expect(await screen.findByLabelText('Summary Provider')).toBeInTheDocument();
+    expect(screen.getByLabelText('If summary generation fails')).toBeInTheDocument();
+    expect(screen.queryByText('Payload Template')).not.toBeInTheDocument();
+});

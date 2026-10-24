@@ -17785,7 +17785,11 @@ class Engine:
                             ari_client=self.ari_client,
                             config=self._tool_config_for_session(session),
                             tool_registry=tool_registry,
-                            provider_name="pipeline"
+                            provider_name="pipeline",
+                            user_input=transcript_text,
+                            # Both streaming and serial paths persist this caller turn
+                            # before tool execution, even when assistant text follows it.
+                            user_input_recorded=True,
                         )
 
                         for tool_call in tool_calls:
@@ -17929,7 +17933,11 @@ class Engine:
                                     # Handle non-terminal tools (e.g., request_transcript)
                                     # Feed result back to LLM for continuation
                                     if not result.get("will_hangup") and canonical_tool not in ("blind_transfer", "live_agent_transfer"):
-                                        tool_result_msg = result.get("message", f"Tool {name} executed successfully.")
+                                        from src.tools.adapters.sanitize import prepare_pipeline_tool_result
+                                        tool_result_msg, continuation_context, continuation_options = prepare_pipeline_tool_result(
+                                            name, result,
+                                            llm_options if result.get("internal_notification") else pipeline.llm_options,
+                                        )
                                         # Tool protocol messages are LLM context only. Keep
                                         # persisted conversation_history transcript-only.
                                         llm_context_history = list(conversation_history)
@@ -17945,12 +17953,15 @@ class Engine:
                                         
                                         # Trigger LLM to generate follow-up response
                                         try:
-                                            context_for_llm = {"prior_messages": _sanitize_for_llm(llm_context_history)}
+                                            context_for_llm = {
+                                                "prior_messages": _sanitize_for_llm(llm_context_history),
+                                                **continuation_context,
+                                            }
                                             llm_response = await pipeline.llm_adapter.generate(
                                                 call_id,
                                                 "",  # Empty transcript - tool result already in context
                                                 context_for_llm,
-                                                pipeline.llm_options
+                                                continuation_options,
                                             )
                                             if llm_response:
                                                 # Handle text response if present
@@ -19508,6 +19519,7 @@ class Engine:
                 inline_http,
                 cache_key=f"agent:{session.context_name or session.call_id}",
             )
+        registry.summary_generator = self._post_call_summary_generator()
         session.tool_runtime_registry = registry
         session.tool_runtime_config = effective.config
         session.tool_generation_id = generation.generation_id
@@ -19585,6 +19597,7 @@ class Engine:
             # An Agent assignment alone is insufficient when this call has no
             # selected correctable pre-call fields.
             registry.unregister("update_call_metadata")
+        registry.summary_generator = self._post_call_summary_generator()
         session.tool_runtime_registry = registry
         await self._save_session(session)
         return session
@@ -20875,6 +20888,7 @@ class Engine:
                 try:
                     registry = self._tool_registry_for_session(session).clone()
                     registry.unregister("update_call_metadata")
+                    registry.summary_generator = self._post_call_summary_generator()
                     session.tool_runtime_registry = registry
                     await self._save_session(session)
                 except Exception:

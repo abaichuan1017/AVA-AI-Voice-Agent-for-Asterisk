@@ -959,6 +959,7 @@ _PASSTHROUGH_FIELDS = (
     "summary_max_words",
     "summary_timeout_ms",
     "summary_prompt",
+    "summary_failure_policy",
     "description",
     "return_raw_json",
     "error_message",
@@ -1054,6 +1055,7 @@ class ManagedToolWrite(BaseModel):
     summary_max_words: Optional[int] = None
     summary_timeout_ms: Optional[int] = None
     summary_prompt: Optional[str] = None
+    summary_failure_policy: Optional[Literal["continue", "abort"]] = None
     description: Optional[str] = None
     parameters: Optional[List[ManagedToolParameter]] = None
     return_raw_json: Optional[bool] = None
@@ -1136,6 +1138,7 @@ class ManagedToolPatch(BaseModel):
     summary_max_words: Optional[int] = None
     summary_timeout_ms: Optional[int] = None
     summary_prompt: Optional[str] = None
+    summary_failure_policy: Optional[Literal["continue", "abort"]] = None
     description: Optional[str] = None
     parameters: Optional[List[ManagedToolParameter]] = None
     return_raw_json: Optional[bool] = None
@@ -1454,11 +1457,19 @@ def _to_out(
 
 async def _validate_summary_provider_selection(doc: Dict[str, Any]) -> None:
     """Reject an explicit summary provider that cannot run before persistence."""
+    if doc.get("phase") == "in_call":
+        from src.tools.summary import summary_prompt
+        try:
+            summary_prompt(doc.get("summary_prompt"), doc.get("summary_max_words") or 100)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="In-call summary_prompt only supports the plain {max_words} placeholder") from None
     if not doc.get("generate_summary"):
         return
     provider_key = str(doc.get("summary_provider") or "").strip()
     if not provider_key:
-        # Preserve the legacy OpenAI fallback for existing API-managed configs.
+        # Only post-call configurations retain the legacy behavior.
+        if doc.get("phase") == "in_call" or doc.get("kind") == "in_call_http_lookup":
+            raise HTTPException(status_code=422, detail="Select an explicit summary provider")
         return
 
     catalog = await config_api.get_llm_provider_options()

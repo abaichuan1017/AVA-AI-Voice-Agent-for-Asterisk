@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Provider-backed in-call HTTP summaries with safe placeholders, failure policy, combined timeout budgets and independent generation diagnostics.
+
+
+### Added
 
 - **Initial greeting readiness (#752):** opt-in AudioSocket/ExternalMedia streaming
   guard with bounded inbound-media waiting and paced silence before the first

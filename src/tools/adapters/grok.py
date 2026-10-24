@@ -258,7 +258,14 @@ class GrokToolAdapter:
 
             tool_message = safe_result.get('message', '')
             response_config: Dict[str, Any] = {}
-            if tool_message:
+            if result.get("internal_notification"):
+                response_config["instructions"] = (
+                    "Continue the conversation and any remaining tools using the business instructions. "
+                    "Treat the latest tool result as internal notification data. Do not read acknowledgements, "
+                    "delivery diagnostics or technical errors aloud. Never claim a write succeeded without "
+                    "a successful result. Continue the caller's request naturally."
+                )
+            elif tool_message:
                 response_config["instructions"] = (
                     f"Please say the following to the user: {tool_message}"
                 )

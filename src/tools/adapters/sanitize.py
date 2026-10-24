@@ -4,6 +4,36 @@ import json
 from typing import Any, Dict, Tuple
 
 
+INTERNAL_NOTIFICATION_INSTRUCTIONS = (
+    "Continue the conversation and any remaining tools using the business instructions. "
+    "Treat the latest tool result as internal notification data. Do not read acknowledgements, "
+    "delivery diagnostics or technical errors aloud. Never claim a write succeeded without "
+    "a successful result. Continue the caller's request naturally."
+)
+
+
+def prepare_pipeline_tool_result(tool_name, result, options):
+    """Return neutral notification context without changing ordinary tool speech."""
+    if not result.get("internal_notification"):
+        return result.get("message", f"Tool {tool_name} executed successfully."), {}, options
+    status = result.get("status")
+    if status not in ("success", "ok", "failed", "error", "timeout", "cancelled", "skipped"):
+        status = "error"
+    instruction = INTERNAL_NOTIFICATION_INSTRUCTIONS + f" Internal notification outcome: {status}."
+    continuation_options = dict(options or {})
+    prompt = str(continuation_options.get("system_prompt") or "")
+    system_instruction = str(continuation_options.get("system_instruction") or prompt)
+    continuation_options["system_prompt"] = (prompt + "\n\n" + instruction).strip()
+    continuation_options["system_instruction"] = (system_instruction + "\n\n" + instruction).strip()
+    response_instructions = str(continuation_options.get("instructions") or prompt or system_instruction)
+    continuation_options["instructions"] = (response_instructions + "\n\n" + instruction).strip()
+    return (
+        json.dumps({"status": status, "internal_notification": True}),
+        {"internal_notification": True, "system_prompt": continuation_options["system_prompt"]},
+        continuation_options,
+    )
+
+
 TOOL_CHECK_EXTENSION_KEYS: Tuple[str, ...] = (
     "status",
     "message",
@@ -125,6 +155,11 @@ def sanitize_tool_result_for_json_string(
         selected_keep_keys = TOOL_CHECK_EXTENSION_KEYS
     elif normalized_tool_name in CALENDAR_TOOL_NAMES:
         selected_keep_keys = TOOL_CALENDAR_KEYS
+
+    if isinstance(result, dict) and result.get("internal_notification"):
+        selected_keep_keys = tuple(dict.fromkeys((*selected_keep_keys,
+            "internal_notification", "delivery_status", "notification_deliveries", "error_code",
+            "summary_provider", "summary_model", "summary_status", "summary_duration_ms", "summary_error_code")))
 
     if not isinstance(result, dict):
         payload: Dict[str, Any] = {"status": "success", "message": str(result)}

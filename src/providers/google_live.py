@@ -2424,6 +2424,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     config=getattr(self, '_full_config', None),
                     tool_registry=self._tool_adapter.registry,
                     provider_name=self.provider_event_name(),
+                    user_input=self._input_transcription_buffer,
                 )
 
                 block_result = await tool_context.get_tool_block_response(func_name)

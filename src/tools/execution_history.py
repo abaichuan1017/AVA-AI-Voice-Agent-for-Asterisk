@@ -421,6 +421,8 @@ def build_in_call_tool_record(
         redacted_fields.append("message")
 
     return {
+        **{key: result_dict[key] for key in ("summary_provider", "summary_model", "summary_status",
+            "summary_duration_ms", "summary_error_code", "delivery_status") if key in result_dict},
         "type": "tool_result",
         "call_id": str(call_id or ""),
         "tool_call_id": stable_tool_call_id(tool_call_id),
