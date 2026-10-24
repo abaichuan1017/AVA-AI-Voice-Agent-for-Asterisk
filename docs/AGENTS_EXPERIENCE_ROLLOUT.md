@@ -87,7 +87,7 @@ gender. A custom image overrides the picture; the preset remains its removal fal
        raise SystemExit(f'No existing database at {db}; investigate before deployment')
    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
    backup = db.parent / f'agents-before-experience-{stamp}.db'
-   with sqlite3.connect(f'file:{db}?mode=ro', uri=True) as source:
+   with sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True) as source:
        with sqlite3.connect(backup) as destination:
            source.backup(destination)
            assert destination.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
