@@ -381,7 +381,7 @@ async def test_new_call_can_book_positively_cancelled_duplicate_without_replayin
     assert (await service.book(cfg, 'setup:old', {}))['reservation_status'] == 'verified_cancelled'
     assert fake.posts == 2
     store.cleanup(['new'])
-    assert (await service.book(cfg, 'call:new', {}))['reservation_status'] == 'confirmed'
+    assert (await service.book(cfg, 'call:new', {}))['reservation_status'] == 'erased'
     assert fake.posts == 2
 
 
@@ -831,3 +831,96 @@ async def test_incomplete_appointment_does_not_hide_valid_agent_appointments(set
     denied = await tool.execute({'action': 'get_available_slots', 'appointment_key': 'incomplete', 'timezone': 'UTC'}, context)
     assert denied['status'] == 'error' and denied['code'] == 'appointment_setup_incomplete'
     assert fake.posts == 0
+
+
+async def erase_history_during_booking(store, monkeypatch):
+    from src.core.call_history import CallHistoryStore, CallRecord
+    monkeypatch.setenv('CALL_HISTORY_ENABLED', 'true')
+    monkeypatch.setenv('CALL_HISTORY_RETENTION_DAYS', '0')
+    monkeypatch.setenv('CALENDLY_DB_PATH', str(store.path))
+    monkeypatch.setenv('CALENDLY_TOKEN_PATH', str(store.token_path))
+    history = CallHistoryStore(str(store.path.parent / 'erased-history.db'))
+    now = datetime.now(timezone.utc)
+    await history.save(CallRecord(call_id='one', start_time=now, end_time=now))
+    record = await history.get_by_call_id('one')
+    assert await history.delete(record.id)
+    assert await history.get_by_call_id('one') is None
+    with sqlite3.connect(history._db_path) as db:
+        assert db.execute('SELECT * FROM pending_calendly_purges').fetchall() == []
+
+
+def assert_erased_barrier(store, key, before):
+    row = store.attempt(key)
+    assert row['state'] == 'erased' and row['lease'] == 0
+    assert row['private'] == row['public'] == '{}'
+    assert row['operation'] == before['operation'] and row['duplicate_key'] == before['duplicate_key']
+    assert key not in store.due()
+    payload = json.loads(before['private'])['payload']
+    assert store.admit('call:other', store.connection(), payload, {})[1] is False
+    with pytest.raises(CalendlyError, match='resolution_not_allowed'):
+        store.resolve(key, 'operator', 'Must not add details after erasure')
+
+
+@pytest.mark.parametrize('outcome', ['confirmed', 'uncertain', 'cancelled'])
+async def test_deleted_history_cannot_be_repopulated_by_inflight_booking_finish(setup, monkeypatch, outcome):
+    store, service, fake, cfg = setup
+    params = await propose(service, fake, cfg)
+    fake.pause = asyncio.Event()
+    fake.lost = outcome == 'uncertain'
+    task = asyncio.create_task(service.book(cfg, 'call:one', params))
+    await asyncio.wait_for(fake.accepted.wait(), timeout=3)
+    before = store.prior('call:one')
+    await erase_history_during_booking(store, monkeypatch)
+    assert_erased_barrier(store, before['id'], before)
+    if outcome == 'cancelled':
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError): await task
+    else:
+        fake.pause.set()
+        result = await task
+        assert result['reservation_status'] == 'erased' and result['status'] == 'error'
+        assert 'does not cancel' in result['message']
+    assert_erased_barrier(store, before['id'], before)
+    result = await service.book(cfg, 'call:one', params)
+    assert result['reservation_status'] == 'erased' and fake.posts == 1
+
+
+async def test_deleted_history_cannot_be_repopulated_by_inflight_reconciliation(setup, monkeypatch):
+    store, service, fake, cfg = setup
+    store.update_connection(store.connection()['revision'], qualified=True)
+    fake.lost = True
+    result = await service.book(cfg, 'call:one', await propose(service, fake, cfg))
+    key = result['attempt_reference']
+    await due(store, key)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = fake.request
+    async def pause(method, path, **kwargs):
+        if path == '/scheduled_events':
+            entered.set()
+            await release.wait()
+        return await original(method, path, **kwargs)
+    fake.request = pause
+    task = asyncio.create_task(service.reconcile(key))
+    await asyncio.wait_for(entered.wait(), timeout=3)
+    before = store.attempt(key)
+    # Reconciliation has read its private lookup details before the delete.
+    await erase_history_during_booking(store, monkeypatch)
+    release.set()
+    assert (await task)['reservation_status'] == 'erased'
+    assert store.attempt(key)['private'] == store.attempt(key)['public'] == '{}'
+    assert store.attempt(key)['state'] == 'erased' and key not in store.due()
+    assert store.prior('call:one')['id'] == key and fake.posts == 1
+    assert before['passes'] == 1
+
+
+
+async def test_history_erasure_before_admission_blocks_prepared_booking_and_creates_no_private_attempt(setup, monkeypatch):
+    store, service, fake, cfg = setup
+    params = await propose(service, fake, cfg)
+    assert store.prior('call:one') is None
+    await erase_history_during_booking(store, monkeypatch)
+    result = await service.book(cfg, 'call:one', params)
+    assert result['reservation_status'] == 'erased' and fake.posts == 0
+    row = store.prior('call:one')
+    assert row['state'] == 'erased' and row['private'] == row['public'] == '{}'
+    assert row['duplicate_key'].startswith('erased:')

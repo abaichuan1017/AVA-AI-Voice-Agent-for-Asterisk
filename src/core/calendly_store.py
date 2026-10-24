@@ -310,12 +310,22 @@ class CalendlyStore:
         days = min(30, days) if days > 0 else 30
         cutoff = time.time() - days * 86400
         with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM proposals WHERE expires<?", (time.time(),))
             db.execute("UPDATE attempts SET private='{}',public='{}' WHERE created<? AND (private!='{}' OR public!='{}')", (cutoff,))
             db.execute("UPDATE resolutions SET note='' WHERE note!='' AND attempt_id IN (SELECT id FROM attempts WHERE created<?)", (cutoff,))
             for call in purged_calls or []:
-                db.execute("UPDATE attempts SET private='{}',public='{}' WHERE operation=? AND (private!='{}' OR public!='{}')", ("call:" + call,))
-                db.execute("UPDATE resolutions SET note='' WHERE note!='' AND attempt_id IN (SELECT id FROM attempts WHERE operation=?)", ("call:" + call,))
+                operation = "call:" + call
+                erased = db.execute("UPDATE attempts SET state='erased',private='{}',public='{}',lease=0 WHERE operation=?", (operation,))
+                if not erased.rowcount:
+                    # Deletion may win before an admission worker commits. The
+                    # same write transaction leaves an operation-only barrier,
+                    # so a late admission cannot create private lookup details.
+                    db.execute("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                        uuid.uuid4().hex, operation, "", "erased", "erased:" + digest(operation), "erased",
+                        "erased", "{}", "{}", time.time(), time.time(), 0, 0, 0, 0))
+                db.execute("UPDATE resolutions SET note='' WHERE note!='' AND attempt_id IN (SELECT id FROM attempts WHERE operation=?)", (operation,))
+            db.commit()
 
 
 def scrub_deleted_calls(call_ids: list[str]) -> bool:

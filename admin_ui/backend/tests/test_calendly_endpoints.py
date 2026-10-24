@@ -132,3 +132,23 @@ async def test_setup_confirmation_reference_as_slot_returns_correctable_error_wi
     assert response.status_code == 422
     assert response.json()['detail']['code'] == 'proposal_expired'
     assert store.prior(operation) is None
+
+
+@pytest.mark.asyncio
+async def test_erased_call_attempt_cannot_expose_links_or_restart_recovery(api):
+    app, store, headers = api
+    conn = store.save_connection(IDENTITY, 'synthetic', 0)
+    store.update_connection(conn['revision'], enabled=True)
+    payload = {'event_type': 'https://api.calendly.com/event_types/test', 'start_time': '2030-01-01T10:00:00+00:00', 'invitee': {'email': 'test@example.com'}}
+    row, _ = store.admit('call:erased', store.connection(), payload, {'appointment_name': 'Private name'})
+    store.finish(row['id'], 'confirmed', {'appointment_name': 'Private name'}, {'cancel_url': 'https://calendly.com/cancellations/private'})
+    store.cleanup(['erased'])
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test', headers=headers) as client:
+        response = await client.get('/api/calendly/attempts/'+row['id'])
+        detail = response.json()
+        assert detail['reservation_status'] == 'erased' and detail['status'] == 'error'
+        assert 'does not cancel' in detail['message']
+        assert 'cancel_url' not in detail and 'appointment_name' not in detail
+        assert 'test@example.com' not in response.text and 'cancellations/private' not in response.text
+        assert (await client.post('/api/calendly/attempts/'+row['id']+'/reconcile')).status_code == 409
+        assert (await client.post('/api/calendly/attempts/'+row['id']+'/external-resolution', json={'note':'must stay erased'})).status_code == 422

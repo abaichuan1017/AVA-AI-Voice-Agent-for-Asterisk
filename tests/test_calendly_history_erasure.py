@@ -52,6 +52,7 @@ async def test_history_deletion_retries_private_erasure_after_restart(tmp_path, 
     await CallHistoryStore(path).retry_pending_calendly_purges()
     erased = journal.attempt('attempt')
     assert erased['private'] == erased['public'] == '{}'
+    assert erased['state'] == 'erased' and erased['lease'] == 0
     assert journal.attempt('preserved')['private'] != '{}'
     assert erased['operation'] == 'call:purged' and erased['duplicate_key'] == 'duplicate'
     with sqlite3.connect(path) as db:

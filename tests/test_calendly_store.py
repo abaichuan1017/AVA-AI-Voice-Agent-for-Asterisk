@@ -93,3 +93,63 @@ def test_cleanup_scrubs_resolution_notes_and_details_but_retains_audit_and_barri
     with store.db() as db:
         assert tuple(db.execute("SELECT actor,outcome,note FROM resolutions WHERE attempt_id='target'").fetchone()) == ('operator', 'resolved_externally', '')
         assert db.execute("SELECT note FROM resolutions WHERE attempt_id='preserved'").fetchone()[0] == 'Test private note test@example.com'
+
+
+@pytest.mark.parametrize('state', ['submitting', 'uncertain', 'needs_operator', 'confirmed', 'rejected', 'resolved_remote_cancelled', 'resolved_externally', 'verified_cancelled'])
+def test_call_erasure_is_an_immutable_barrier_against_late_writers(tmp_path, state):
+    store = CalendlyStore(str(tmp_path / 'db'), str(tmp_path / 'token'))
+    with store.db() as db:
+        db.execute("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            'attempt', 'call:deleted', 'conn', 'fingerprint', 'duplicate', 'marker', state,
+            '{"private":"value"}', '{"public":"value"}', time.time(), 0, 0, 0, 500, 0))
+    before = store.attempt('attempt')
+    store.cleanup(['deleted'])
+    store.finish('attempt', 'confirmed', {'late': 'details'}, {'late': 'private'})
+    assert store.release_cancelled_duplicate(before) is False
+    row = store.attempt('attempt')
+    assert row['state'] == 'erased' and row['lease'] == 0
+    assert row['private'] == row['public'] == '{}'
+    assert store.prior('call:deleted')['id'] == 'attempt'
+
+
+
+def test_erasure_transaction_blocks_admission_between_scrub_and_missing_operation_barrier(tmp_path, monkeypatch):
+    import threading
+    from contextlib import contextmanager
+    from concurrent.futures import ThreadPoolExecutor
+    store = CalendlyStore(str(tmp_path / 'db'), str(tmp_path / 'token'))
+    conn = store.save_connection(IDENTITY, 'synthetic', 0)
+    store.update_connection(conn['revision'], enabled=True)
+    entered, release, started = threading.Event(), threading.Event(), threading.Event()
+    original = store.db
+    class PausedConnection:
+        def __init__(self, db): self.db = db
+        def __getattr__(self, name): return getattr(self.db, name)
+        def execute(self, sql, parameters=()):
+            result = self.db.execute(sql, parameters)
+            if sql.startswith("UPDATE attempts SET state='erased'"):
+                entered.set()
+                assert release.wait(3)
+            return result
+    @contextmanager
+    def paused_db():
+        with original() as db: yield PausedConnection(db)
+    monkeypatch.setattr(store, 'db', paused_db)
+    def admit():
+        started.set()
+        return store.admit('call:deleted', store.connection(), PAYLOAD, {'private':'must not persist'})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        erasure = pool.submit(store.cleanup, ['deleted'])
+        assert entered.wait(2)
+        admission = pool.submit(admit)
+        assert started.wait(2)
+        try:
+            with pytest.raises(TimeoutError): admission.result(timeout=0.05)
+        finally:
+            release.set()
+        erasure.result(timeout=3)
+        row, admitted = admission.result(timeout=3)
+    assert not admitted and row['state'] == 'erased'
+    assert row['private'] == row['public'] == '{}'
+    assert len(store.list_attempts()) == 0
+    assert CalendlyStore(str(store.path), str(store.token_path)).prior('call:deleted')['state'] == 'erased'

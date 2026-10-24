@@ -38,6 +38,7 @@ def view(row: dict, operation: str | None = None) -> dict:
                         "resolved_remote_cancelled": "The appointment was created and has since been cancelled; staff can assist.",
                         "verified_cancelled": "The original appointment was verified cancelled. This request cannot book it again; start a new call for a new appointment.",
                         "rejected": "The booking was rejected. Confirm corrected details before another attempt.",
+                        "erased": "The saved scheduling details were erased. This does not cancel an appointment; ask staff to verify in Calendly. Do not book again from this request.",
                         "resolved_externally": "Staff recorded handling this request outside AVA."}.get(state, "Confirmation is pending. Do not book again; ask staff to verify.")}
 
 

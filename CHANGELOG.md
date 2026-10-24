@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep call-deleted Calendly operations immutable, including a deletion that wins before admission, so delayed booking or reconciliation responses cannot restore erased details; retain replay barriers and explicitly report that erasure does not cancel remote appointments.
 - Preserve explicit Calendly Agent denial through tool disable/re-enable, isolate setup operations by appointment, erase resolution notes with retained audit barriers, and keep recovery tasks independent when cleanup or another attempt fails. Load pending requests on setup entry, preserve recovery checks during rate-limit cooldowns, and keep valid appointments discoverable when another binding is incomplete.
 - Preserve Google buffered-audio order across concurrent flushes and interruption, reject stale chunks across latency-tracking awaits, and pace partial speech tails after the filler idle cutoff so terminal audio drain can finish.
 - Keep Calendly erasure work durable through journal absence and disabled history collection; handle malformed readback safely, display Agent access defaults consistently with runtime, preserve the latest UI draft after async setup, and expose matching recovery request references.
