@@ -45,6 +45,7 @@ _DEFAULT_TOOL_REDACTION_MODE = "strict"
 _warned_invalid_redaction_modes: set[str] = set()
 
 _SECRET_PARAMETER_KEYS = {
+    "confirmation_reference",
     # Credentials and authorization material. This follows the repository-wide
     # logging and HTTP-diagnostic redaction posture without substring matches
     # that would turn ordinary keys such as ``bypass`` into false positives.

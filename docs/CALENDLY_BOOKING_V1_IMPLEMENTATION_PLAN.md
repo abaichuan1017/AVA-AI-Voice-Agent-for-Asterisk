@@ -14,6 +14,8 @@ The first setup submission encountered a transient network timeout during read-o
 
 Prepared October 23, 2026. This document replaces the earlier broad Calendly scope for the first release. The agreed target is self-hosted AVA Core with one operator-owned Calendly connection and usable in-call appointment booking. OAuth, calendar administration, and a general booking-management application remain future work.
 
+Voice acceptance follow-up: the isolated Google Live call created one real appointment and cleaned up media/telephony successfully, with no post-call notifications. It did not pass the voice UX gate: the agent submitted an email containing an extra dot, skipped the complete final recap, and spoke a raw conference enum. The appointment was canceled in Calendly and booking paused. Native booking now first prepares a canonical recap (no booking POST), including exact email spelling and a short-lived reference bound to call, connection revision, slot, metadata, name, recipient and answers. A subsequent unchanged request needs that reference and both approval flags; a correction requires a new recap. This is a data-binding guard, not proof of audible consent, so another real voice test remains required. Presentation labels now say Google Meet/Teams/Zoom without altering the qualified metadata digest. Regression evidence after this fix: 3,584 core tests passed, 3 skipped, 176 CI exclusions, 59.49% source coverage; 979 backend tests passed; focused recap/privacy/Google adapter checks passed 119 tests. Raw first-call evidence: `logs/archived/rca-20261024-045500` in the original operator workspace. No draft PR is open.
+
 Repository inspection baseline: `e8923779f066bccc7e8c185d007db65869c2a175`. The working checkout contains unrelated uncommitted calendar, provider, and other work. Reinspect current main and relevant changes before implementation; do not overwrite or incorporate unrelated work by accident.
 
 ## 1. Outcome and scope
@@ -164,7 +166,7 @@ Expose one native tool, `calendly_calendar`, with action values rather than inde
 | --- | --- | --- |
 | `list_appointment_types` | Trusted call/agent scope resolves permitted keys; do not accept a user/account URI | Allowed names, keys, fixed durations, location summaries, required questions |
 | `get_available_slots` | Permitted appointment key, future date range, caller IANA timezone | Up to 3 suggested slots by default; at most 10 per request; explicit search bounds, truncation, errors, and timezone |
-| `create_booking` | Previously offered slot reference, appointment key, caller name, confirmed email, timezone, validated answers, explicit confirmation flag | Confirmed/pending/rejected outcome, safe summary, stable attempt reference, recovery guidance |
+| `create_booking` | Previously offered slot reference, appointment key, caller name/email, timezone and validated answers; subsequent submission also requires server-issued confirmation reference and both confirmation flags | First request returns canonical recap/email spelling without a POST; after fresh spoken approval the unchanged, call-bound recap permits one submission and a confirmed/pending/rejected outcome with stable attempt reference |
 
 1. Determine the appointment purpose and choose an allowed appointment type. Use the trusted call clock for relative dates; clarify ambiguous spoken dates/timezones rather than inventing them.
 2. Query Calendly and offer a short list in the caller's timezone. Availability is not a reservation; an API failure is not evidence of a busy slot.

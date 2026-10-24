@@ -20,11 +20,18 @@ def email(value: str) -> str:
     return local + "@" + domain.lower()
 
 
+def location_label(value: str) -> str:
+    return {"google_conference": "Google Meet", "microsoft_teams_conference": "Microsoft Teams",
+            "zoom_conference": "Zoom"}.get(value, value)
+
+
 def view(row: dict, operation: str | None = None) -> dict:
     if operation is not None and row["operation"] != operation:
         return {"status": "error", "code": "existing_request_needs_staff", "message": "Please ask staff to verify the existing request."}
     state = row["state"]
     public = json.loads(row["public"])
+    if "location_summary" in public:
+        public["location_summary"] = location_label(public["location_summary"])
     return {**public, "status": "success" if state == "confirmed" else "pending" if state in {"submitting", "uncertain", "needs_operator"} else "error",
             "reservation_status": state, "attempt_reference": row["id"],
             "message": {"confirmed": "Appointment booked. Calendly handles its configured confirmation.",
@@ -95,7 +102,8 @@ class CalendlyService:
     async def discovery(self) -> list[dict]:
         conn, client = await self.credentials()
         raw = await client.pages("/event_types", {"user": conn["user"]})
-        return [appointment(row, conn["user"]) for row in raw]
+        entries = [appointment(row, conn["user"]) for row in raw]
+        return [{**entry, "location_summary": location_label(entry["location_summary"])} for entry in entries]
 
     def binding(self, cfg: dict, key: str, conn: dict) -> dict:
         entries = cfg.get("appointments") or {}
@@ -148,7 +156,7 @@ class CalendlyService:
             output.append({"slot_reference": ref, "start_datetime": when.astimezone(ZoneInfo(tz)).isoformat(),
                            "end_datetime": (when + timedelta(minutes=entry["duration"])).astimezone(ZoneInfo(tz)).isoformat()})
         return {"status": "success", "appointment_key": key, "appointment_name": entry["name"], "duration_minutes": entry["duration"],
-                "timezone": tz, "location_summary": entry["location_summary"], "questions": entry["questions"],
+                "timezone": tz, "location_summary": location_label(entry["location_summary"]), "questions": entry["questions"],
                 "slots": output, "search_start": a.isoformat(), "search_end": b.isoformat(), "slots_truncated": len(rows) > len(output)}
 
     async def book(self, cfg: dict, operation: str, params: dict, admission_check=None) -> dict:
@@ -165,7 +173,7 @@ class CalendlyService:
         entry = await self.current(cfg, key, conn, client, setup=bool(proposal.get("setup")))
         if proposal["revision"] != conn["revision"] or digest(entry) != digest(proposal["appointment"]):
             raise CalendlyError("proposal_changed_reconfirm")
-        if params.get("booking_confirmed") is not True or params.get("email_confirmed") is not True:
+        if proposal.get("setup") and (params.get("booking_confirmed") is not True or params.get("email_confirmed") is not True):
             raise CalendlyError("confirmation_required")
         name = params.get("name", "")
         if not isinstance(name, str) or not name.strip() or len(name) > 200 or any(ord(c) < 32 for c in name):
@@ -192,6 +200,27 @@ class CalendlyService:
         when = instant(proposal["start"])
         if when <= datetime.now(timezone.utc):
             raise CalendlyError("proposal_expired")
+        public = {"appointment_name": entry["name"], "start_datetime": when.astimezone(ZoneInfo(proposal["timezone"])).isoformat(),
+                  "end_datetime": (when + timedelta(minutes=entry["duration"])).astimezone(ZoneInfo(proposal["timezone"])).isoformat(),
+                  "timezone": proposal["timezone"], "duration_minutes": entry["duration"],
+                  "location_summary": location_label(entry["location_summary"])}
+        if not proposal.get("setup"):
+            # Booleans from the model alone must not skip a canonical readback.
+            # Reuse expiring, call/connection-bound proposals; persist only a
+            # digest, never another copy of the recipient or spoken spelling.
+            fingerprint = digest([params.get("slot_reference"), conn["revision"], entry, name.strip(), recipient, questions])
+            reference = params.get("confirmation_reference")
+            if not reference:
+                reference = await asyncio.to_thread(self.store.proposal, operation, conn["id"], {"confirmation_digest": fingerprint})
+                spelling = " ".join({".": "dot", "_": "underscore", "-": "hyphen", "+": "plus", "@": "at"}.get(c, c) for c in recipient)
+                return {**public, "status": "confirmation_required", "confirmation_reference": reference,
+                        "confirmation_recap": {"name": name.strip(), "email": recipient, "email_spelling": spelling},
+                        "message": "Nothing is booked. Spell the exact email including every dot and symbol, read the complete appointment recap, then ask for approval. Only after the caller approves this recap, call create_booking with the same details, this confirmation_reference and both confirmation flags true. A correction requires a new recap without a confirmation_reference."}
+            confirmation = await asyncio.to_thread(self.store.read_proposal, reference, operation, conn["id"])
+            if confirmation.get("confirmation_digest") != fingerprint:
+                raise CalendlyError("confirmation_changed_reconfirm")
+            if params.get("booking_confirmed") is not True or params.get("email_confirmed") is not True:
+                raise CalendlyError("confirmation_required")
         slots = await client.request("GET", "/event_type_available_times", params={"event_type": entry["uri"], "start_time": when.isoformat(), "end_time": (when + timedelta(minutes=entry["duration"])).isoformat()})
         if not any(instant(s.get("start_time", "")) == when and s.get("status") == "available" and s.get("invitees_remaining") == 1 for s in slots.get("collection", [])):
             raise CalendlyError("slot_no_longer_available")
@@ -204,8 +233,6 @@ class CalendlyService:
             await admission_check()
         if deadline - time.monotonic() < 7:
             raise CalendlyError("insufficient_submission_budget")
-        public = {"appointment_name": entry["name"], "start_datetime": when.astimezone(ZoneInfo(proposal["timezone"])).isoformat(),
-                  "end_datetime": (when + timedelta(minutes=entry["duration"])).isoformat(), "timezone": proposal["timezone"], "location_summary": entry["location_summary"]}
         row, admitted = await asyncio.to_thread(self.store.admit, operation, conn, payload, public)
         if not admitted:
             return view(row, operation)

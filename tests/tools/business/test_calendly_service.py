@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.core.calendly_store import CalendlyStore
+from src.core.calendly_store import CalendlyStore, digest
 from src.tools.business.calendly_client import CalendlyClient, CalendlyError, appointment, resource_path, validate_config
 from src.tools.business.calendly_service import CalendlyService, email
 from src.tools.runtime_config import resolve_agent_tool_config
@@ -101,7 +101,12 @@ def setup(tmp_path):
 async def propose(service, fake, cfg, operation="call:one", setup=False):
     start = datetime.now(timezone.utc) + timedelta(minutes=1)
     result = await service.slots(cfg, operation, "consultation", start.isoformat(), (start+timedelta(days=7)).isoformat(), "America/Los_Angeles", setup=setup)
-    return {"slot_reference": result["slots"][0]["slot_reference"], "name": "Test Invitee", "email": "test@example.com", "answers": [], "booking_confirmed": True, "email_confirmed": True}
+    params = {"slot_reference": result["slots"][0]["slot_reference"], "name": "Test Invitee", "email": "test@example.com", "answers": [], "booking_confirmed": True, "email_confirmed": True}
+    if not setup and not result['questions']:
+        recap = await service.book(cfg, operation, params)
+        assert recap['status'] == 'confirmation_required'
+        params['confirmation_reference'] = recap['confirmation_reference']
+    return params
 
 
 async def due(store, key):
@@ -123,6 +128,63 @@ async def test_success_duplicate_and_private_result(setup):
     assert len(fake.invitee["tracking"]) == 6
     assert fake.invitee["tracking"]["utm_content"].startswith("ava-v1-")
     assert "call:one" not in json.dumps(fake.invitee["tracking"])
+
+
+async def test_native_recipient_and_complete_recap_required_before_any_post(setup):
+    store, service, fake, cfg = setup
+    params = await propose(service, fake, cfg)
+    params.pop('confirmation_reference')
+    params['email'] = 'test.person+tag@example.com'
+    recap = await service.book(cfg, 'call:one', params)
+    assert recap['status'] == 'confirmation_required'
+    assert recap['confirmation_recap']['email'] == params['email']
+    assert 'dot' in recap['confirmation_recap']['email_spelling']
+    assert 'plus' in recap['confirmation_recap']['email_spelling']
+    assert all(key in recap for key in ['appointment_name','start_datetime','end_datetime','timezone','duration_minutes','location_summary'])
+    assert fake.posts == 0 and store.prior('call:one') is None
+    public_recap = sanitize_tool_result_for_json_string(recap, tool_name='calendly_calendar')
+    assert public_recap['confirmation_reference'] == recap['confirmation_reference']
+    assert public_recap['confirmation_recap'] == recap['confirmation_recap']
+    confirmed = {**params, 'confirmation_reference': recap['confirmation_reference']}
+    with pytest.raises(CalendlyError, match='confirmation_changed_reconfirm'):
+        await service.book(cfg, 'call:one', {**confirmed, 'email':'different@example.com'})
+    assert fake.posts == 0
+    restarted = CalendlyService(CalendlyStore(str(store.path), str(store.token_path)), lambda token: fake)
+    assert (await restarted.book(cfg, 'call:one', confirmed))['reservation_status'] == 'confirmed'
+    assert fake.posts == 1
+
+
+async def test_native_confirmation_cannot_reuse_another_calls_reference(setup):
+    _, service, fake, cfg = setup
+    first = await propose(service, fake, cfg)
+    other = await propose(service, fake, cfg, 'call:other')
+    with pytest.raises(CalendlyError, match='proposal_expired'):
+        await service.book(cfg, 'call:other', {**other, 'confirmation_reference':first['confirmation_reference']})
+    assert fake.posts == 0
+
+
+async def test_conference_display_name_preserves_existing_readback_qualification(setup):
+    store, service, fake, cfg = setup
+    fake.raw['locations'] = [{'kind':'google_conference'}]
+    entry = appointment(fake.raw, USER)
+    store.update_connection(store.connection()['revision'], qualified_types={TYPE:digest(entry)})
+    params = await propose(service, fake, cfg)
+    params.pop('confirmation_reference')
+    recap = await service.book(cfg, 'call:one', params)
+    assert recap['location_summary'] == 'Google Meet'
+    assert store.connection()['qualified_types'][TYPE] == digest(entry)
+    assert fake.posts == 0
+
+
+def test_canonical_recap_and_reference_are_not_persisted_in_tool_history():
+    from src.tools.execution_history import build_in_call_tool_record
+    record = build_in_call_tool_record(
+        tool_name='calendly_calendar', call_id='synthetic', tool_call_id='synthetic',
+        parameters={'action':'create_booking','confirmation_reference':'private-reference'},
+        result={'status':'confirmation_required','message':'Nothing is booked.',
+                'confirmation_reference':'private-reference','confirmation_recap':{'email':'test.person@example.com'}})
+    saved = json.dumps(record)
+    assert 'private-reference' not in saved and 'test.person@example.com' not in saved
 
 
 async def test_read_rate_limit_is_shared_after_restart(setup):
@@ -306,6 +368,9 @@ async def test_required_questions_exact_payload_and_redaction(setup):
     with pytest.raises(CalendlyError):
         await service.book(cfg, "call:one", params)
     params["answers"] = [{"position": 2, "answer": "One"}]
+    recap = await service.book(cfg, "call:one", params)
+    assert recap['status'] == 'confirmation_required'
+    params['confirmation_reference'] = recap['confirmation_reference']
     assert (await service.book(cfg, "call:one", params))["status"] == "success"
     assert fake.invitee["questions_and_answers"] == [{"question": "Company?", "position": 2, "answer": "One"}]
 

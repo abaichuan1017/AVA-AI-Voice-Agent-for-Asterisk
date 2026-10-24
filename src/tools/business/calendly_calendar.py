@@ -20,12 +20,13 @@ class CalendlyCalendarTool(Tool):
             "appointment_key": {"type": "string"}, "start_datetime": {"type": "string"},
             "end_datetime": {"type": "string"}, "timezone": {"type": "string", "description": "Caller-confirmed IANA timezone"},
             "slot_reference": {"type": "string"}, "name": {"type": "string"}, "email": {"type": "string"},
+            "confirmation_reference": {"type": "string", "description": "Returned by the first create_booking call. Omit to prepare a new canonical recap; include only after the caller approves that exact recap."},
             "booking_confirmed": {"type": "boolean"}, "email_confirmed": {"type": "boolean"},
             "answers": {"type": "array", "items": {"type": "object", "properties": {"position": {"type": "integer"}, "answer": {"type": "string"}}, "required": ["position", "answer"], "additionalProperties": False}},
         }
         return ToolDefinition(name="calendly_calendar", category=ToolCategory.BUSINESS, requires_channel=False,
                               max_execution_time=20,
-                              description="Book one Calendly appointment in the current call. Use action values, never separate function names. List allowed appointment types, offer returned slots, collect required questions and read back the exact email. Recap date/time/timezone/duration/location/recipient and obtain explicit approval before create_booking with email_confirmed and booking_confirmed true. Never retry an uncertain booking or create another appointment to change a booking; use the Calendly confirmation or staff. Booking success does not prove invitation delivery.",
+                              description="Book one Calendly appointment in the current call. Use action values, never separate function names. List allowed appointment types, offer returned slots, collect required questions. First call create_booking without confirmation_reference to prepare a canonical recap; this does not book. Spell the returned email including every dot and symbol, read date/time/timezone/duration/location/name/recipient, and ask for final approval. Only after that approval call create_booking with the returned confirmation_reference, unchanged details, email_confirmed and booking_confirmed true. Corrections require a new recap. Never retry an uncertain booking or create another appointment to change a booking; use the Calendly confirmation or staff. Booking success does not prove invitation delivery.",
                               input_schema={"type": "object", "properties": props, "required": ["action"], "additionalProperties": False})
 
     async def execute(self, parameters, context):
