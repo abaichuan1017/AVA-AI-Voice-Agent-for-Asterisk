@@ -1,6 +1,8 @@
 """Provider-neutral Calendly v1 native in-call tool."""
 import asyncio
 import logging
+import copy
+import time
 from datetime import datetime, timedelta, timezone
 
 from src.core.calendly_store import CalendlyStore
@@ -22,13 +24,13 @@ class CalendlyCalendarTool(Tool):
             "end_datetime": {"type": "string", "description": "Exclusive availability window end, ISO 8601 with UTC offset. Defaults to seven days after the start. For a specific local day, send local midnight to next midnight with the correct offsets."},
             "timezone": {"type": "string", "description": "Required caller-confirmed IANA timezone, e.g. America/Los_Angeles."},
             "slot_reference": {"type": "string", "description": "Exact opaque reference returned by get_available_slots. Never a date/time or invented value. Select a returned slot before create_booking."}, "name": {"type": "string"}, "email": {"type": "string"},
-            "confirmation_reference": {"type": "string", "description": "Returned by the first create_booking call. Omit to prepare a new canonical recap; include only after the caller approves that exact recap."},
+            "confirmation_reference": {"type": "string", "description": "Exact reference returned by the recap. After fresh approval, send this and both flags true; the active call retains the prepared details. Never invent or shorten a reference."},
             "booking_confirmed": {"type": "boolean"}, "email_confirmed": {"type": "boolean"},
             "answers": {"type": "array", "items": {"type": "object", "properties": {"position": {"type": "integer"}, "answer": {"type": "string"}}, "required": ["position", "answer"], "additionalProperties": False}},
         }
         return ToolDefinition(name="calendly_calendar", category=ToolCategory.BUSINESS, requires_channel=False,
                               max_execution_time=20,
-                              description="Book one Calendly appointment in the current call. Use action values, never separate function names. List allowed appointment types, offer returned slots, collect required questions. First call create_booking without confirmation_reference to prepare a canonical recap; this does not book. Spell the returned email including every dot and symbol, read date/time/timezone/duration/location/name/recipient, and ask for final approval. Only after that approval call create_booking with the returned confirmation_reference, unchanged details, email_confirmed and booking_confirmed true. Corrections require a new recap. Never retry an uncertain booking or create another appointment to change a booking; use the Calendly confirmation or staff. Booking success does not prove invitation delivery.",
+                              description="Book one Calendly appointment in the current call. Use action values, never separate function names. List allowed appointment types, offer returned slots, collect required questions. First call create_booking without confirmation_reference to prepare a canonical recap; this does not book. Spell the returned email including every dot and symbol, read date/time/timezone/duration/location/name/recipient, and ask for final approval. After fresh approval, call create_booking with the exact returned confirmation_reference and email_confirmed=true, booking_confirmed=true. The active call retains the unchanged prepared details; repeating them is optional. Corrections require a new recap. Validation errors do not mean a slot is busy. Never retry an uncertain booking or create another appointment to change a booking; use the Calendly confirmation or staff. Booking success does not prove invitation delivery.",
                               input_schema={"type": "object", "properties": props, "required": ["action"], "additionalProperties": False})
 
     async def execute(self, parameters, context):
@@ -73,7 +75,35 @@ class CalendlyCalendarTool(Tool):
                         raise CalendlyError("call_not_active")
                     if await context.get_tool_block_response("calendly_calendar"):
                         raise CalendlyError("call_not_active")
-                return await service.book(cfg, operation, parameters, active)
+                session = await context.get_session() if getattr(context, "session_store", None) is not None else None
+                request = dict(parameters)
+                reference = request.get("confirmation_reference")
+                if reference and not await asyncio.to_thread(store.prior, operation):
+                    saved = getattr(session, "_calendly_confirmation", {}) if session else {}
+                    if saved and (saved["expires"] < time.monotonic() or saved["reference"] != reference):
+                        raise CalendlyError("confirmation_changed_reconfirm")
+                    if saved:
+                        # Retain only validated preparation details in the active
+                        # call's memory. Never infer fresh approval flags or put
+                        # this cache in the journal/history. Explicitly supplied
+                        # changes still reach the service's digest comparison.
+                        request = {**copy.deepcopy(saved["parameters"]), **request}
+                    elif not all(request.get(k) for k in ("slot_reference", "name", "email")):
+                        raise CalendlyError("confirmation_details_required")
+                result = await service.book(cfg, operation, request, active)
+                if session is not None:
+                    if result.get("status") == "confirmation_required":
+                        prepared = {"action": "create_booking", "slot_reference": request["slot_reference"],
+                                    "name": result["confirmation_recap"]["name"], "email": result["confirmation_recap"]["email"],
+                                    "answers": [{"position": a["position"], "answer": a["answer"]}
+                                                for a in (request.get("answers") or [])]}
+                        # Private runtime attribute: excluded from dataclass
+                        # serialization and repr, discarded with the call.
+                        session._calendly_confirmation = {"reference": result["confirmation_reference"],
+                                                         "parameters": prepared, "expires": time.monotonic() + 300}
+                    elif result.get("reservation_status"):
+                        session._calendly_confirmation = {}
+                return result
             raise CalendlyError("unsupported_action")
         except CalendlyError as exc:
             messages = {
@@ -82,6 +112,8 @@ class CalendlyCalendarTool(Tool):
                 "search_start_required": "Supply a search start along with the end, or omit both dates for the next seven days. No booking was submitted.",
                 "invalid_search_window": "Search a future window of at most 31 days. For next available, omit both dates for the next seven days. For a specific day use midnight to next midnight in the caller's timezone. No booking was submitted.",
                 "proposal_expired": "Check availability again and use an exact returned slot_reference; never use a date/time as a reference. Then prepare a new recap and obtain approval. No booking was submitted.",
+                "confirmation_details_required": "The prepared details are unavailable in this call. Prepare a new recap with the selected slot, name and exact email, then obtain fresh approval. No booking was submitted; this does not mean the time is busy.",
+                "confirmation_changed_reconfirm": "The confirmation reference is stale, changed or incorrect. Prepare a new recap without a confirmation_reference and obtain fresh approval. No booking was submitted; do not say the time is unavailable.",
             }
             return {"status": "pending" if exc.uncertain else "error", "code": exc.code,
                     "message": messages.get(exc.code, "Scheduling could not be confirmed. Clarify missing details or ask staff; never repeat an uncertain booking.")}

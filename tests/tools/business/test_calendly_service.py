@@ -430,6 +430,80 @@ async def test_spoken_weekday_uses_local_date_and_survives_sanitizer(setup):
     assert safe['spoken_date'].startswith('Saturday,')
 
 
+async def native_confirmation(setup, monkeypatch, call='native', answers=None):
+    from src.tools.business import calendly_calendar as native
+    from src.tools.context import ToolExecutionContext
+    from src.core.models import CallSession
+    from src.core.session_store import SessionStore
+    store, service, fake, cfg = setup
+    monkeypatch.setattr(native, 'CalendlyStore', lambda: store)
+    monkeypatch.setattr(native, 'CalendlyService', lambda _: service)
+    sessions = SessionStore()
+    session = CallSession(call_id=call, caller_channel_id=call)
+    await sessions.upsert_call(session)
+    context = ToolExecutionContext(call_id=call, session_store=sessions, config={'tools': {'calendly_calendar': cfg}})
+    tool = native.CalendlyCalendarTool()
+    slots = await tool.execute({'action': 'get_available_slots', 'appointment_key': 'consultation', 'timezone': 'America/Los_Angeles'}, context)
+    params = {'action': 'create_booking', 'slot_reference': slots['slots'][0]['slot_reference'], 'name': 'Test', 'email': 'test@example.com', 'answers': answers or []}
+    recap = await tool.execute(params, context)
+    assert recap['status'] == 'confirmation_required'
+    return tool, context, session, params, recap
+
+
+async def test_native_reference_only_approval_submits_exact_prepared_details_once(setup, monkeypatch):
+    from dataclasses import asdict
+    _, _, fake, _ = setup
+    tool, context, session, _, recap = await native_confirmation(setup, monkeypatch)
+    final = {'action': 'create_booking', 'confirmation_reference': recap['confirmation_reference'], 'email_confirmed': True, 'booking_confirmed': True}
+    assert '_calendly_confirmation' not in asdict(session)
+    assert '_calendly_confirmation' not in repr(session)
+    result = await tool.execute(final, context)
+    assert result['reservation_status'] == 'confirmed' and fake.posts == 1
+    assert fake.invitee['name'] == 'Test' and fake.invitee['email'] == 'test@example.com'
+    assert not session._calendly_confirmation
+    assert await tool.execute(final, context) == result
+    assert fake.posts == 1
+
+
+@pytest.mark.parametrize('fault', ['missing_flags', 'changed_email', 'changed_name', 'wrong_reference', 'expired', 'missing_cache', 'cleanup', 'disabled'])
+async def test_native_confirmation_hydration_never_infers_approval_or_bypasses_checks(setup, monkeypatch, fault):
+    store, _, fake, _ = setup
+    tool, context, session, _, recap = await native_confirmation(setup, monkeypatch)
+    final = {'action': 'create_booking', 'confirmation_reference': recap['confirmation_reference'], 'email_confirmed': True, 'booking_confirmed': True}
+    if fault == 'missing_flags': final.pop('booking_confirmed')
+    if fault == 'changed_email': final['email'] = 'different@example.com'
+    if fault == 'changed_name': final['name'] = 'Different'
+    if fault == 'wrong_reference': final['confirmation_reference'] = 'invented'
+    if fault == 'expired': session._calendly_confirmation['expires'] = 0
+    if fault == 'missing_cache': session._calendly_confirmation = {}
+    if fault == 'cleanup': session.cleanup_in_progress = True
+    if fault == 'disabled': store.update_connection(store.connection()['revision'], enabled=False)
+    result = await tool.execute(final, context)
+    assert result['status'] == 'error' and fake.posts == 0
+    assert store.prior('call:native') is None
+
+
+async def test_correction_replaces_pending_reference_and_requires_new_approval(setup, monkeypatch):
+    _, _, fake, _ = setup
+    tool, context, _, params, first = await native_confirmation(setup, monkeypatch)
+    second = await tool.execute({**params, 'email': 'corrected@example.com'}, context)
+    assert second['status'] == 'confirmation_required'
+    stale = await tool.execute({'action': 'create_booking', 'confirmation_reference': first['confirmation_reference'], 'email_confirmed': True, 'booking_confirmed': True}, context)
+    assert stale['code'] == 'confirmation_changed_reconfirm' and fake.posts == 0
+    result = await tool.execute({'action': 'create_booking', 'confirmation_reference': second['confirmation_reference'], 'email_confirmed': True, 'booking_confirmed': True}, context)
+    assert result['reservation_status'] == 'confirmed' and fake.invitee['email'] == 'corrected@example.com'
+
+
+async def test_native_reference_only_preserves_required_answers_without_caching_unknown_fields(setup, monkeypatch):
+    _, _, fake, _ = setup
+    fake.raw['custom_questions'] = [{'name': 'Company?', 'position': 2, 'enabled': True, 'required': True, 'type': 'single_select', 'answer_choices': ['One', 'Two']}]
+    tool, context, session, _, recap = await native_confirmation(setup, monkeypatch, answers=[{'position': 2, 'answer': 'One', 'ignored': 'do not retain'}])
+    assert session._calendly_confirmation['parameters']['answers'] == [{'position': 2, 'answer': 'One'}]
+    result = await tool.execute({'action': 'create_booking', 'confirmation_reference': recap['confirmation_reference'], 'email_confirmed': True, 'booking_confirmed': True}, context)
+    assert result['reservation_status'] == 'confirmed' and fake.posts == 1
+    assert fake.invitee['questions_and_answers'] == [{'question': 'Company?', 'position': 2, 'answer': 'One'}]
+
+
 async def test_concurrent_same_operation_one_post(setup):
     store, service, fake, cfg = setup
     params = await propose(service, fake, cfg)
