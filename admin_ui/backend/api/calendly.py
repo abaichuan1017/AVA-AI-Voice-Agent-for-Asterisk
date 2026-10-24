@@ -1,6 +1,7 @@
 """Authenticated Calendly setup/recovery. Never expose the PAT through config."""
 import asyncio
 import json
+import logging
 import sqlite3
 import sys
 import uuid
@@ -50,7 +51,14 @@ async def safe(awaitable):
     try:
         return await awaitable
     except CalendlyError as exc:
+        # Codes are integration-owned constants; never log the candidate token,
+        # upstream response body, request arguments, or exception repr.
+        logging.getLogger(__name__).warning("Calendly action failed (%s)", exc.code)
         messages = {
+            "invalid_token": "Paste only the personal access token, with no surrounding spaces or line breaks.",
+            "network_unavailable": "The server could not reach Calendly. Wait briefly and verify the connection again.",
+            "invalid_response": "Calendly's response could not be read. Verify the connection again; no booking was submitted by verification.",
+            "invalid_host_timezone": "Calendly returned an unsupported account timezone. Check the account timezone in Calendly.",
             "upstream_401": "Calendly rejected the token. Create or replace the saved token and verify again.",
             "upstream_403": "Calendly denied access. Check the token scopes and the account's paid booking eligibility.",
             "upstream_404": "The Calendly resource is unavailable. Refresh appointment selection; staff must check any pending booking.",

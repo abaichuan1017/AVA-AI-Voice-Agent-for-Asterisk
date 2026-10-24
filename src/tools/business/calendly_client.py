@@ -159,9 +159,13 @@ class CalendlyClient:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout, connect=min(3, timeout))) as session:
                 async with session.request(method, ORIGIN + path, params=params, json=body,
                                            headers={"Authorization": f"Bearer {self.token}"}, allow_redirects=False) as response:
-                    payload = await response.content.read(262145)
-                    if len(payload) > 262144:
-                        raise CalendlyError("response_too_large", uncertain=writing)
+                    payload = bytearray()
+                    # read(n) may return only the currently available fragment.
+                    # Drain through EOF under the existing total deadline/cap.
+                    async for chunk in response.content.iter_chunked(65536):
+                        if len(payload) + len(chunk) > 262144:
+                            raise CalendlyError("response_too_large", uncertain=writing)
+                        payload.extend(chunk)
                     try:
                         data = json.loads(payload)
                     except (ValueError, UnicodeDecodeError):
