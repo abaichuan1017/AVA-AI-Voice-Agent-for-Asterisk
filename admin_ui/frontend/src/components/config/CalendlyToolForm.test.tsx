@@ -30,6 +30,17 @@ function mock(connected = true) {
 afterEach(() => { cleanup(); vi.resetAllMocks(); sessionStorage.clear(); });
 
 describe('Calendly guided setup', () => {
+    it('keeps the PAT masked and unsaved when verification fails', async () => {
+        mock(false);
+        vi.mocked(axios.request).mockRejectedValue(new Error('synthetic failure'));
+        render(<CalendlyToolForm config={{}} onChange={vi.fn()} onSave={vi.fn()} />);
+        await userEvent.type(screen.getByLabelText('Personal access token'), 'synthetic-pat');
+        await userEvent.click(screen.getByRole('button', { name: 'Verify connection' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Connection verification did not finish. No booking was submitted.');
+        expect(screen.getByRole('button', { name: 'Save connection' })).toBeDisabled();
+        expect(screen.getByLabelText('Personal access token')).toHaveAttribute('type', 'password');
+        expect(screen.queryByText('synthetic-pat')).not.toBeInTheDocument();
+    });
     it('masks a candidate token, verifies without saving, and invalidates verification after edits', async () => {
         mock(false);
         render(<CalendlyToolForm config={{}} onChange={vi.fn()} onSave={vi.fn()} />);

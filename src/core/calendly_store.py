@@ -36,12 +36,22 @@ class CalendlyStore:
         fd = os.open(self.path, os.O_CREAT | os.O_WRONLY, 0o600)
         os.close(fd)
         os.chmod(self.path, 0o600)
+        # Existing journals need no schema writes or initialization lock. Setup
+        # requests and the recovery worker open this store independently.
+        with self.db() as db:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version == 1:
+                return
+            if version != 0:
+                raise CalendlyError("journal_version_unsupported")
         with portalocker.Lock(str(self.path) + ".init.lock", timeout=2):
             os.chmod(str(self.path) + ".init.lock", 0o600)
             with self.db() as db:
                 version = db.execute("PRAGMA user_version").fetchone()[0]
                 if version not in {0, 1}:
                     raise CalendlyError("journal_version_unsupported")
+                if version == 1:
+                    return
                 db.executescript("""
                     CREATE TABLE IF NOT EXISTS connection(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
                     CREATE TABLE IF NOT EXISTS proposals(

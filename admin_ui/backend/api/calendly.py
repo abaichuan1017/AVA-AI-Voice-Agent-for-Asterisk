@@ -4,6 +4,7 @@ import json
 import sqlite3
 import sys
 import uuid
+import portalocker
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -39,6 +40,8 @@ async def service():
     # No credential or arbitrary filesystem path is accepted from a request.
     try:
         return CalendlyService(await asyncio.to_thread(CalendlyStore))
+    except portalocker.exceptions.LockException:
+        raise HTTPException(503, detail={"code": "journal_busy", "message": "Scheduling storage is busy. Wait a moment and try this setup action again. No booking was submitted."}) from None
     except (OSError, sqlite3.Error, CalendlyError):
         raise HTTPException(503, detail={"code": "journal_unavailable", "message": "Scheduling storage is unavailable; no booking was submitted."}) from None
 
@@ -68,6 +71,8 @@ async def safe(awaitable):
                             detail={"code": exc.code, "message": messages.get(exc.code, "Calendly could not complete this action. Check setup or ask staff to verify a pending request.")}) from None
     except (OSError, ValueError, TimeoutError, sqlite3.Error):
         raise HTTPException(503, detail={"code": "calendly_unavailable", "message": "Calendly is unavailable. Do not repeat an uncertain booking."}) from None
+    except portalocker.exceptions.LockException:
+        raise HTTPException(503, detail={"code": "credential_busy", "message": "The connection is being updated. Wait a moment and try this setup action again."}) from None
 
 
 class Candidate(BaseModel):

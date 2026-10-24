@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Depends
+from fastapi import HTTPException
+import portalocker
 from httpx import ASGITransport, AsyncClient
 
 import auth
@@ -13,6 +15,18 @@ from src.tools.business.calendly_service import CalendlyService
 from src.tools.business.calendly_client import CalendlyError
 
 IDENTITY = {"uri": "https://api.calendly.com/users/test", "current_organization": "https://api.calendly.com/organizations/test", "name": "Synthetic Host", "timezone": "UTC"}
+
+
+@pytest.mark.asyncio
+async def test_journal_lock_failure_is_a_safe_retryable_setup_error(monkeypatch):
+    def blocked():
+        raise portalocker.exceptions.AlreadyLocked('synthetic-private-diagnostic')
+    monkeypatch.setattr(calendly, 'CalendlyStore', blocked)
+    with pytest.raises(HTTPException) as error:
+        await calendly.service()
+    assert error.value.status_code == 503
+    assert error.value.detail['code'] == 'journal_busy'
+    assert 'synthetic-private-diagnostic' not in str(error.value.detail)
 
 
 @pytest.fixture

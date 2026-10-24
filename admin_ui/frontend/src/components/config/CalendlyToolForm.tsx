@@ -52,12 +52,12 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
         return () => { alive = false; };
     }, [token]);
     useEffect(() => { setApproved(false); }, [slot, name, recipient, answers, tz, testKey]);
-    const run = async (work: () => Promise<void>) => {
+    const run = async (work: () => Promise<void>, fallback = 'This action could not be confirmed. Refresh status before repeating a booking.') => {
         if (busy) return;
         setBusy(true); setError(''); setNotice('');
         try { await work(); } catch (e: unknown) {
             const detail = axios.isAxiosError(e) ? e.response?.data?.detail : undefined;
-            setError(typeof detail === 'string' ? detail : detail?.message || 'This action could not be confirmed. Refresh status before repeating a booking.');
+            setError(typeof detail === 'string' ? detail : detail?.message || fallback);
         } finally { setBusy(false); }
     };
     const selected = config.appointments || {};
@@ -86,7 +86,7 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
             <p className="text-xs text-muted-foreground">Scopes: users:read, event_types:read, availability:read, scheduled_events:write. Saved tokens are never displayed.</p>
             <label className="block text-sm">{connection.id ? 'Replace saved token' : 'Personal access token'}<input className={input} type="password" autoComplete="off" value={candidate} onChange={e => changeCandidate(e.target.value)} /></label>
             <div className="flex flex-wrap gap-2">
-                <button type="button" className={button} onClick={() => run(verify)}>Verify connection</button>
+                <button type="button" className={button} onClick={() => run(verify, 'Connection verification did not finish. No booking was submitted. Try Verify connection again.')}>Verify connection</button>
                 <button type="button" className={button} disabled={!candidate || !verified} onClick={() => run(async () => {
                     const saved = await api('PUT', '/connection', { token: candidate, revision: connection.revision });
                     setConnection(saved); changeCandidate(''); setEntries([]); setProposal(null); setResult(null);

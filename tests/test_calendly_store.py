@@ -3,6 +3,7 @@ import sqlite3
 import time
 
 import pytest
+import portalocker
 
 from src.core.calendly_store import CalendlyStore
 from src.tools.business.calendly_client import CalendlyError
@@ -57,3 +58,15 @@ def test_interrupted_token_replace_stays_disabled(tmp_path, monkeypatch):
     with pytest.raises(OSError): store.save_connection(IDENTITY, 'new-synthetic', conn['revision'])
     assert not store.connection()['enabled']
     with pytest.raises(CalendlyError, match='credential_revision_mismatch'): store.credentials()
+
+
+def test_initialized_journal_reads_skip_schema_lock_and_writes(tmp_path):
+    paths = (str(tmp_path / 'db'), str(tmp_path / 'token'))
+    store = CalendlyStore(*paths)
+    with portalocker.Lock(str(store.path) + '.init.lock', timeout=0):
+        with store.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            # Recovery/setup opens must not contend on schema initialization,
+            # even while another process owns a normal journal transaction.
+            assert CalendlyStore(*paths).connection() == {'revision': 0, 'enabled': False}
+            db.rollback()
