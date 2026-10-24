@@ -17787,6 +17787,9 @@ class Engine:
                             tool_registry=tool_registry,
                             provider_name="pipeline",
                             user_input=transcript_text,
+                            # Both streaming and serial paths persist this caller turn
+                            # before tool execution, even when assistant text follows it.
+                            user_input_recorded=True,
                         )
 
                         for tool_call in tool_calls:

@@ -158,7 +158,7 @@ class InCallHTTPTool(Tool):
     
     async def execute(self, parameters, context):
         if not self.config.enabled or not self.config.url:
-            return {"status": "failed" if not self.config.enabled else "error", "message": self.config.error_message}
+            return {"status": "failed" if not self.config.enabled else "error", "message": self.config.error_message, "delivery_status": "skipped"}
         diagnostics = {"internal_notification": True} if self.config.generate_summary else {}
         delivery_started = False
         async def run():
@@ -187,7 +187,7 @@ class InCallHTTPTool(Tool):
         except asyncio.TimeoutError:
             result = {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain" if delivery_started else "skipped"}
         except Exception:
-            result = {"status": "error", "message": self.config.error_message, "delivery_status": "skipped"}
+            result = {"status": "error", "message": self.config.error_message, "delivery_status": "uncertain" if delivery_started else "skipped"}
         return {**result, **diagnostics}
 
     async def _execute_request(
@@ -209,9 +209,13 @@ class InCallHTTPTool(Tool):
             - message: Human-readable message for AI
             - data: Output variables or raw JSON (if return_raw_json=True)
         """
+        # Invocation-local transport diagnostics survive response parsing failures.
+        # HTTP acceptance describes request delivery, not application-side success.
+        delivery = {"delivery_status": "skipped"}
         if not self.config.enabled:
             logger.debug(f"In-call HTTP tool disabled: {self.config.name}")
             return {
+                **delivery,
                 "status": "failed",
                 "message": self.config.error_message,
             }
@@ -219,6 +223,7 @@ class InCallHTTPTool(Tool):
         if not self.config.url:
             logger.warning(f"In-call HTTP tool has no URL configured: {self.config.name}")
             return {
+                **delivery,
                 "status": "error",
                 "message": self.config.error_message,
             }
@@ -301,7 +306,16 @@ class InCallHTTPTool(Tool):
                 elif body is not None:
                     request_kwargs["data"] = body
                 
+                delivery["delivery_status"] = "uncertain"
                 async with session.request(**request_kwargs) as response:
+                    delivery.update(
+                        http_status=response.status,
+                        delivery_status=(
+                            "accepted" if 200 <= response.status < 300
+                            else "rejected" if 400 <= response.status < 500 and response.status != 408
+                            else "uncertain"
+                        ),
+                    )
                     # Check response size
                     content_length = response.headers.get('Content-Length')
                     if content_length and int(content_length) > self.config.max_response_size_bytes:
@@ -310,6 +324,7 @@ class InCallHTTPTool(Tool):
                             extra={"size": content_length, "max": self.config.max_response_size_bytes}
                         )
                         return {
+                            **delivery,
                             "status": "error",
                             "message": self.config.error_message,
                         }
@@ -335,6 +350,7 @@ class InCallHTTPTool(Tool):
                                 context.call_id,
                             )
                         return {
+                            **delivery,
                             "status": "failed",
                             "message": self.config.error_message,
                         }
@@ -350,6 +366,7 @@ class InCallHTTPTool(Tool):
                                 self.config.max_response_size_bytes,
                             )
                             return {
+                                **delivery,
                                 "status": "error",
                                 "message": self.config.error_message,
                             }
@@ -378,6 +395,7 @@ class InCallHTTPTool(Tool):
                                         context.call_id,
                                     )
                                 return {
+                                    **delivery,
                                     "status": "error",
                                     "message": self.config.error_message,
                                 }
@@ -401,6 +419,7 @@ class InCallHTTPTool(Tool):
                                 str(e),
                             )
                         return {
+                            **delivery,
                             "status": "error",
                             "message": self.config.error_message,
                         }
@@ -419,6 +438,7 @@ class InCallHTTPTool(Tool):
                                 context.call_id,
                             )
                         return {
+                            **delivery,
                             "status": "error",
                             "message": self.config.error_message,
                         }
@@ -436,6 +456,7 @@ class InCallHTTPTool(Tool):
                     
                     # Build result
                     result = {
+                        **delivery,
                         "status": "success",
                     }
                     
@@ -472,16 +493,18 @@ class InCallHTTPTool(Tool):
                     return result
         
         except asyncio.TimeoutError:
-            return {"status": "timeout", "message": self.config.error_message, "delivery_status": "uncertain"}
+            return {**delivery, "status": "timeout", "message": self.config.error_message}
         except aiohttp.ClientError as e:
             logger.warning(f"In-call HTTP tool request failed: {self.config.name} error={e}")
             return {
+                **delivery,
                 "status": "error",
                 "message": self.config.error_message,
             }
         except Exception as e:
             logger.error(f"In-call HTTP tool unexpected error: {self.config.name} error={e}", exc_info=True)
             return {
+                **delivery,
                 "status": "error",
                 "message": self.config.error_message,
             }
