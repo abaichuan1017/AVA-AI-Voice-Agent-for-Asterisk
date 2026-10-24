@@ -57,7 +57,8 @@ async def safe(awaitable):
         messages = {
             "invalid_token": "Paste only the personal access token, with no surrounding spaces or line breaks.",
             "network_unavailable": "The server could not reach Calendly. Wait briefly and verify the connection again.",
-            "invalid_response": "Calendly's response could not be read. Verify the connection again; no booking was submitted by verification.",
+            "invalid_response": "Calendly returned an unreadable response. Check the saved request status before repeating a booking.",
+            "identity_access_denied": "Calendly denied the account identity check. Confirm this PAT includes users:read. If that scope is present, check account or organization API restrictions. This is not a booking eligibility check.",
             "invalid_host_timezone": "Calendly returned an unsupported account timezone. Check the account timezone in Calendly.",
             "upstream_401": "Calendly rejected the token. Create or replace the saved token and verify again.",
             "upstream_403": "Calendly denied access. Check the token scopes and the account's paid booking eligibility.",

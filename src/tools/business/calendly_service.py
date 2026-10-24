@@ -78,7 +78,12 @@ class CalendlyService:
             client = self.client_factory(token)
         else:
             _, client = await self.credentials()
-        person = await self.identity(client)
+        try:
+            person = await self.identity(client)
+        except CalendlyError as exc:
+            if exc.code == "upstream_403":
+                raise CalendlyError("identity_access_denied") from None
+            raise
         # Identity success is not proof of appointment or paid write access.
         return {k: person[k] for k in ("uri", "current_organization", "name", "timezone") if k in person}
 

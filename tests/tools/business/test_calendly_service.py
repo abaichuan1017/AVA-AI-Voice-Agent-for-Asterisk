@@ -138,6 +138,16 @@ async def test_read_rate_limit_is_shared_after_restart(setup):
         restarted.credentials()
 
 
+async def test_identity_denial_is_distinct_from_booking_eligibility(setup):
+    _, service, fake, _ = setup
+    async def denied(*args, **kwargs):
+        raise CalendlyError("upstream_403")
+    fake.request = denied
+    with pytest.raises(CalendlyError, match="identity_access_denied"):
+        await service.verify("synthetic-private-token")
+    assert fake.posts == 0
+
+
 async def test_lost_response_reconciles_after_restart_without_post(setup):
     store, service, fake, cfg = setup
     conn = store.connection()
