@@ -331,7 +331,7 @@ def test_existing_calls_do_not_gain_calendly_without_explicit_tool_assignment():
     from src.tools.registry import ToolRegistry
     from src.tools.business.calendly_calendar import CalendlyCalendarTool
     registry = ToolRegistry.isolated()
-    registry.register(CalendlyCalendarTool())
+    registry.register(CalendlyCalendarTool)
     assert registry.get_tools_for_context(ToolPhase.IN_CALL, context_tool_names=[]) == []
     assert [tool.definition.name for tool in registry.get_tools_for_context(
         ToolPhase.IN_CALL, context_tool_names=['calendly_calendar'])] == ['calendly_calendar']
