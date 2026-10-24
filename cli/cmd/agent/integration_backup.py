@@ -105,9 +105,14 @@ def backup(root, destination):
         finally:
             os.close(fd)
 
+    def raise_walk_error(error):
+        raise error
+
     secrets, _ = source_path("secrets")
     if secrets.exists():
-        for directory, directories, files in os.walk(secrets, followlinks=False):
+        if not secrets.is_dir():
+            raise ValueError("non-directory integration secrets")
+        for directory, directories, files in os.walk(secrets, followlinks=False, onerror=raise_walk_error):
             for name in directories:
                 source_path(str(Path(directory) / name))
             for name in files:

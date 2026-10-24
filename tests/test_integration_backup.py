@@ -158,3 +158,20 @@ def test_updater_image_supplies_the_required_backup_runtime():
     dockerfile = (ROOT / "updater/Dockerfile").read_text()
     assert "    python3 " in dockerfile
     assert "hasattr(sqlite3.Connection, 'backup')" in dockerfile
+
+
+def test_non_directory_secret_root_fails_closed(tmp_path):
+    (tmp_path / "secrets").write_text("synthetic")
+    assert run_backup(tmp_path).returncode != 0
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read owner-unreadable directories")
+def test_unreadable_secret_subdirectory_fails_closed(tmp_path):
+    directory = tmp_path / "secrets/providers"
+    directory.mkdir(parents=True)
+    (directory / "key").write_text("synthetic")
+    directory.chmod(0)
+    try:
+        assert run_backup(tmp_path).returncode != 0
+    finally:
+        directory.chmod(0o700)
