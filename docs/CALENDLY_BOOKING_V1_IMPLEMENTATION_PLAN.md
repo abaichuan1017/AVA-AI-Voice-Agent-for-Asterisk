@@ -18,6 +18,8 @@ Voice acceptance follow-up: the isolated Google Live call created one real appoi
 
 The recap fix was deployed with rebuilt candidate images at 05:14:47 UTC October 24. The idle/paused gates passed before deployment; subsequent health showed ARI and AudioSocket ready, all providers ready, zero calls/sessions/channels, and retained tracking qualification. Booking remains paused pending repeat-call participation. Restart evidence: `logs/archived/rca-20261024-051600` in the original operator workspace.
 
+Post-restart availability previews encountered transient read timeouts. A separate read-only probe succeeded (metadata approximately 2.5 seconds, exact availability 1.8 seconds). Metadata/availability requests now share at most one transient network GET retry per operation/client, inside the existing service deadlines; quota/invalid responses and every POST remain non-retryable. Focused confirmation/recovery/privacy/runtime checks passed 135 tests, and the final core gate passed 3,585 tests / 3 skipped / 176 CI exclusions with 59.49% coverage. This does not relax the durable admission or ambiguous-write policy.
+
 Repository inspection baseline: `e8923779f066bccc7e8c185d007db65869c2a175`. The working checkout contains unrelated uncommitted calendar, provider, and other work. Reinspect current main and relevant changes before implementation; do not overwrite or incorporate unrelated work by accident.
 
 ## 1. Outcome and scope

@@ -44,6 +44,7 @@ class ObservedClient:
     """Share observed upstream cooldowns between setup and voice processes."""
     def __init__(self, client, store, connection):
         self.client, self.store, self.connection = client, store, connection
+        self.read_retry_used = False
 
     async def observed(self, method, *args, **kwargs):
         try:
@@ -53,8 +54,17 @@ class ObservedClient:
                 await asyncio.to_thread(self.store.observe_cooldown, self.connection, exc.cooldown)
             raise
 
-    async def request(self, *args, **kwargs):
-        return await self.observed(self.client.request, *args, **kwargs)
+    async def request(self, method, *args, **kwargs):
+        try:
+            return await self.observed(self.client.request, method, *args, **kwargs)
+        except CalendlyError as exc:
+            # One safe read retry per operation/client, still inside the native
+            # service deadline. Never replay a POST, quota rejection or invalid
+            # response, and never reset the shared write admission journal.
+            if method != "GET" or exc.code != "network_unavailable" or self.read_retry_used:
+                raise
+            self.read_retry_used = True
+            return await self.observed(self.client.request, method, *args, **kwargs)
 
     async def pages(self, *args, **kwargs):
         return await self.observed(self.client.pages, *args, **kwargs)

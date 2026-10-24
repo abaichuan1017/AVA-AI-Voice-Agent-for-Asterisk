@@ -11,7 +11,7 @@ import pytest
 
 from src.core.calendly_store import CalendlyStore, digest
 from src.tools.business.calendly_client import CalendlyClient, CalendlyError, appointment, resource_path, validate_config
-from src.tools.business.calendly_service import CalendlyService, email
+from src.tools.business.calendly_service import CalendlyService, ObservedClient, email
 from src.tools.runtime_config import resolve_agent_tool_config
 from src.tools.adapters.sanitize import sanitize_tool_result_for_json_string
 
@@ -198,6 +198,35 @@ async def test_read_rate_limit_is_shared_after_restart(setup):
     assert restarted.connection()["cooldown"] > time.time()
     with pytest.raises(CalendlyError, match="rate_limited"):
         restarted.credentials()
+
+
+async def test_one_transient_read_retry_per_operation_never_replays_post(setup):
+    store, _, fake, _ = setup
+    calls = []
+    async def unavailable(method, *args, **kwargs):
+        calls.append(method)
+        raise CalendlyError('network_unavailable', uncertain=method == 'POST')
+    fake.request = unavailable
+    observed = ObservedClient(fake, store, store.connection())
+    with pytest.raises(CalendlyError):
+        await observed.request('GET', '/users/me')
+    assert calls == ['GET','GET']
+    with pytest.raises(CalendlyError):
+        await observed.request('GET', '/users/me')
+    assert calls == ['GET','GET','GET']
+    fresh = ObservedClient(fake, store, store.connection())
+    with pytest.raises(CalendlyError) as failure:
+        await fresh.request('POST', '/invitees')
+    assert failure.value.uncertain and calls == ['GET','GET','GET','POST']
+    recovered = []
+    async def transient(method, *args, **kwargs):
+        recovered.append(method)
+        if len(recovered) == 1:
+            raise CalendlyError('network_unavailable')
+        return {'collection': []}
+    fake.request = transient
+    assert await ObservedClient(fake, store, store.connection()).request('GET', '/event_type_available_times') == {'collection': []}
+    assert recovered == ['GET','GET']
 
 
 async def test_identity_denial_is_distinct_from_booking_eligibility(setup):
