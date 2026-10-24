@@ -924,3 +924,21 @@ async def test_history_erasure_before_admission_blocks_prepared_booking_and_crea
     row = store.prior('call:one')
     assert row['state'] == 'erased' and row['private'] == row['public'] == '{}'
     assert row['duplicate_key'].startswith('erased:')
+
+
+
+async def test_erasing_a_verified_cancelled_call_does_not_reblock_another_calls_booking(setup):
+    store, service, fake, cfg = setup
+    params = await propose(service, fake, cfg)
+    first = await service.book(cfg, 'call:one', params)
+    old = store.attempt(first['attempt_reference'])
+    fake.event['status'] = fake.invitee['status'] = 'canceled'
+    conn, client = await service.credentials()
+    assert await service.verify_cancelled_duplicate(old, conn, client)
+    store.cleanup(['one'])
+    assert (await service.book(cfg, 'call:one', params))['reservation_status'] == 'erased'
+    new_params = await propose(service, fake, cfg, 'call:replacement')
+    result = await service.book(cfg, 'call:replacement', new_params)
+    assert result['reservation_status'] == 'confirmed' and fake.posts == 2
+    assert store.attempt(old['id'])['state'] == 'erased'
+    assert store.attempt(old['id'])['private'] == store.attempt(old['id'])['public'] == '{}'

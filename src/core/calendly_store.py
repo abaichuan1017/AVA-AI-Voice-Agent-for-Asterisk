@@ -316,7 +316,10 @@ class CalendlyStore:
             db.execute("UPDATE resolutions SET note='' WHERE note!='' AND attempt_id IN (SELECT id FROM attempts WHERE created<?)", (cutoff,))
             for call in purged_calls or []:
                 operation = "call:" + call
-                erased = db.execute("UPDATE attempts SET state='erased',private='{}',public='{}',lease=0 WHERE operation=?", (operation,))
+                erased = db.execute(
+                    "UPDATE attempts SET state='erased',private='{}',public='{}',lease=0,"
+                    "duplicate_key=CASE WHEN state IN ('rejected','aborted_before_submit','verified_cancelled') "
+                    "THEN 'erased:'||id ELSE duplicate_key END WHERE operation=?", (operation,))
                 if not erased.rowcount:
                     # Deletion may win before an admission worker commits. The
                     # same write transaction leaves an operation-only barrier,

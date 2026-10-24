@@ -95,21 +95,30 @@ def test_cleanup_scrubs_resolution_notes_and_details_but_retains_audit_and_barri
         assert db.execute("SELECT note FROM resolutions WHERE attempt_id='preserved'").fetchone()[0] == 'Test private note test@example.com'
 
 
-@pytest.mark.parametrize('state', ['submitting', 'uncertain', 'needs_operator', 'confirmed', 'rejected', 'resolved_remote_cancelled', 'resolved_externally', 'verified_cancelled'])
+@pytest.mark.parametrize('state', ['submitting', 'uncertain', 'needs_operator', 'confirmed', 'rejected', 'aborted_before_submit', 'resolved_remote_cancelled', 'resolved_externally', 'verified_cancelled'])
 def test_call_erasure_is_an_immutable_barrier_against_late_writers(tmp_path, state):
     store = CalendlyStore(str(tmp_path / 'db'), str(tmp_path / 'token'))
+    conn = store.save_connection(IDENTITY, 'synthetic', 0)
+    store.update_connection(conn['revision'], enabled=True)
+    original, admitted = store.admit('call:deleted', store.connection(), PAYLOAD, {'public':'value'})
+    assert admitted
+    key = original['id']
     with store.db() as db:
-        db.execute("INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-            'attempt', 'call:deleted', 'conn', 'fingerprint', 'duplicate', 'marker', state,
-            '{"private":"value"}', '{"public":"value"}', time.time(), 0, 0, 0, 500, 0))
-    before = store.attempt('attempt')
+        db.execute('UPDATE attempts SET state=?,lease=500 WHERE id=?', (state, key))
+    before = store.attempt(key)
     store.cleanup(['deleted'])
-    store.finish('attempt', 'confirmed', {'late': 'details'}, {'late': 'private'})
+    store.finish(key, 'confirmed', {'late': 'details'}, {'late': 'private'})
     assert store.release_cancelled_duplicate(before) is False
-    row = store.attempt('attempt')
+    row = store.attempt(key)
     assert row['state'] == 'erased' and row['lease'] == 0
     assert row['private'] == row['public'] == '{}'
-    assert store.prior('call:deleted')['id'] == 'attempt'
+    assert store.prior('call:deleted')['id'] == key
+    # The erased operation never replays, including for a different payload.
+    assert store.admit('call:deleted', store.connection(), PAYLOAD, {})[1] is False
+    released = state in {'rejected', 'aborted_before_submit', 'verified_cancelled'}
+    assert row['duplicate_key'] == ('erased:'+key if released else before['duplicate_key'])
+    assert store.admit('call:other', store.connection(), PAYLOAD, {})[1] is released
+    assert store.attempt(key)['private'] == store.attempt(key)['public'] == '{}'
 
 
 
