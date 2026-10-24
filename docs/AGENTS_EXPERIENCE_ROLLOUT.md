@@ -1,0 +1,121 @@
+# Agents experience: upgrade, rollback and voiprnd acceptance
+
+## Scope
+
+The Agents page adds searchable cards/list views, configuration-based tool summaries,
+96px card avatars and a routed editor with General, Conversation, Tools and Advanced
+sections. The editor preserves the existing controls and sends only changed fields.
+Internal navigation, browser Back and page unload protect unsaved changes.
+
+Male/female presets are UI metadata, not TTS voice settings. Existing agents display
+male AVA until an operator selects another preset. The UI does not infer the voice's
+gender. A custom image overrides the picture; the preset remains its removal fallback.
+
+## Storage and compatibility
+
+- `AgentsStore` adds nullable `avatar_preset` and `avatar_image` TEXT columns only.
+  No rows, identifiers, routing flags, defaults or existing settings are rewritten.
+  Missing columns are checked on every initialization. A partial migration resumes;
+  inability to add required columns fails initialization instead of serving broken writes.
+- PNG/JPEG/WebP inputs are limited to 2 MiB and 16 million pixels, decoded and
+  re-encoded as metadata-free PNG thumbnails no larger than 256×256 and 256 KiB.
+  Image bytes are stored as a data URL in the agent row. Save, replace and remove
+  occur through the existing authenticated Agent API. Cancel writes nothing.
+- This deliberately replaces the initially proposed external image directory.
+  Images and settings are in the same SQLite transaction and backup. There are no
+  separate files to orphan, serve publicly or recover out of sync. Deleting the row
+  also deletes its image; existing backups may retain earlier versions.
+- The existing persistent data volume and `AGENTS_DB_PATH` are reused. No new
+  volume/service or image-directory migration is needed. Default mascots ship in
+  the Admin UI image. No engine, provider or telephony code changes are required.
+- YAML reconciliation retains the appearance columns and imported-agent ownership.
+  Appearance is intentionally excluded from runtime YAML exports. A YAML export
+  alone is therefore not a backup of appearance; preserve the SQLite database.
+- Older clients omit the new fields and leave them untouched. The immediate
+  predecessor Admin UI ignores the columns and continues to read/create/update
+  agents. Do not remove columns during rollback. Re-upgrade retains appearance.
+  Compatibility is verified against the implementation branch's base commit;
+  arbitrary older major-version downgrades are not covered.
+
+## Before deploying to voiprnd
+
+1. Record the running Admin UI image ID, deployed revision and resolved Compose
+   configuration. Preserve local operator configuration; do not reset the server checkout.
+2. Check the actual `AGENTS_DB_PATH`, data mount, available disk space and permissions.
+   The normal updater snapshots `agents.db` with SQLite's backup API. Its default
+   host-path backup must not be assumed to cover a relocated database: explicitly
+   snapshot the configured path when using one.
+3. Make a consistent database backup before the new Admin UI first starts. With
+   the current Admin UI running, the following creates a snapshot beside the real
+   database, under the same persistent directory. Verify that directory is mounted
+   on the host and copy the snapshot off-host according to the normal backup policy:
+
+   ```sh
+   docker compose exec -T admin_ui python - <<'PY'
+   import os, sqlite3
+   from datetime import datetime, timezone
+   from pathlib import Path
+   db = Path(os.getenv('AGENTS_DB_PATH', '/app/data/operator/agents.db'))
+   if not db.is_file():
+       raise SystemExit(f'No existing database at {db}; investigate before deployment')
+   stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+   backup = db.parent / f'agents-before-experience-{stamp}.db'
+   with sqlite3.connect(f'file:{db}?mode=ro', uri=True) as source:
+       with sqlite3.connect(backup) as destination:
+           source.backup(destination)
+           assert destination.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+   backup.chmod(0o600)
+   print(backup)
+   PY
+   ```
+
+4. Build/tag the candidate Admin UI image from the reviewed commit and retain the
+   old image. Recreate **only `admin_ui`** using the deployment's normal Compose
+   configuration. Do not restart the engine to apply this UI change. Allow any
+   existing legacy Context migration to complete through its established path.
+5. Check Admin UI startup logs and authenticated API access, then hard-refresh the
+   browser to load the matching frontend. Record candidate revision/image and results.
+
+## Voiprnd acceptance checklist
+
+- Compare existing agent count, IDs, slugs, voices, providers/pipelines, active/default
+  flags, prompts and tool policies with the pre-deployment snapshot.
+- Confirm cards/list, search, status/engine filters and empty results; verify 96px
+  right-side card avatars and compact left-side list avatars in both themes.
+- Open Tools from a card and inspect the existing access policies. Counts are
+  configured capabilities including inherited selections, never connection-health claims.
+- Change only a preset and verify the request changes only appearance; confirm the
+  provider, actual voice, routing and tool permissions are unchanged.
+- Upload PNG/JPEG/WebP, save, refresh, replace, remove and cancel. Check invalid
+  format/oversize errors and confirm a rejected save leaves previous data intact.
+- Navigate Back or to another section of the application with unsaved changes;
+  test both Keep editing and Discard. Test reload's browser warning.
+- Recreate Admin UI and verify appearance persists. Reconcile an imported YAML
+  agent and verify its custom avatar survives without changing ownership.
+- Place an agreed test call to an existing agent and verify its voice and routing.
+  This live call check remains a deployment acceptance step; local tests do not
+  substitute for a voiprnd call.
+
+## Rollback
+
+For a UI/application regression, redeploy the recorded predecessor Admin UI image
+and hard-refresh browsers. **Keep the upgraded database and data mount.** Nullable
+extra columns are ignored by the predecessor; old-UI edits preserve their contents.
+This preserves operator edits made since deployment and avoids a destructive DB restore.
+
+Restore the snapshot only for confirmed data damage and after deciding which newer
+operator changes would be lost. Stop all database writers/readers (`admin_ui` and
+`ai_engine`, plus any external tooling), retain a copy of the failed database and
+its WAL/SHM files, restore the verified snapshot at the configured database path,
+and remove only stale WAL/SHM sidecars associated with the replaced database.
+Preserve file owner/permissions, run `PRAGMA integrity_check`, then start the
+recorded compatible images. Never copy a live SQLite main file over another live
+database or treat an application rollback as automatic database restoration.
+
+## Local validation
+
+Automated tests cover legacy and partially upgraded schemas, repeated migration,
+image validation/normalization, omitted-vs-null PATCH behavior, YAML reconciliation,
+SQLite online backup/restore, changed-field saves and blocked browser navigation.
+The predecessor store is also exercised against an upgraded DB for edit/create and
+re-upgrade compatibility. Browser checks use an isolated sample database, not voiprnd.

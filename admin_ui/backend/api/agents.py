@@ -2,6 +2,8 @@
 import json, os, sqlite3, sys
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, field_validator
+from typing import Literal
+from agent_appearance import normalize_avatar
 from agents_store import AgentsStore, slugify
 from starter_agents import seed_starter_agents
 from agents_migration import current_drift, acknowledge_drift, run_migration, \
@@ -69,7 +71,14 @@ def _store_for_agent_write() -> AgentsStore:
         )
     return store
 
-class AgentIn(BaseModel):
+class AgentAppearance(BaseModel):
+    avatar_preset: Literal["male", "female"] | None = None
+    avatar_image: str | None = None
+
+    _check_avatar = field_validator("avatar_image")(normalize_avatar)
+
+
+class AgentIn(AgentAppearance):
     display_name: str
     provider: str | None = None
     prompt: str
@@ -109,7 +118,7 @@ class AgentIn(BaseModel):
         except HangupPolicyConfigError as exc:
             raise ValueError(str(exc)) from exc
 
-class AgentPatch(BaseModel):
+class AgentPatch(AgentAppearance):
     display_name: str | None = None
     provider: str | None = None
     prompt: str | None = None
@@ -154,6 +163,8 @@ class AgentOut(BaseModel):
     as a response_model never drops a field (wire-compatible with the raw rows we
     returned before). The is_* flags stay int 0/1 — existing consumers depend on that
     shape, so they are NOT coerced to bool."""
+    avatar_preset: str | None = None
+    avatar_image: str | None = None
     id: str
     slug: str
     display_name: str

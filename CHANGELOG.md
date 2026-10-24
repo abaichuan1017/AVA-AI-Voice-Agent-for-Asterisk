@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Refreshed Agents workspace with searchable cards/list views, configured-tool summaries,
+  larger AVA avatars, male/female appearance presets and custom image uploads. A routed,
+  tabbed settings editor protects unsaved changes and sends only edited fields. Appearance
+  uses additive SQLite columns and is included in existing database backups; see
+  [upgrade and rollback guidance](docs/AGENTS_EXPERIENCE_ROLLOUT.md).
 - Native Pushover as a named tool in the existing pre/in/post-call workflow, with normal Agent selection, configurable descriptions/templates, masked per-tool credentials, multiple enabled user/group recipients, one shared summary per invocation, generic phase defaults with optional CRM customizations, official documentation links and explicit previews/tests.
 - Provider-backed in-call HTTP summaries with safe placeholders, failure policy, combined timeout budgets and independent generation diagnostics.
 - **Initial greeting readiness (#752):** opt-in AudioSocket/ExternalMedia streaming
