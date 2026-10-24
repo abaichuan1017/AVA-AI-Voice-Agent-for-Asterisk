@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import struct
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -21,8 +22,8 @@ def provider(callback, prefill=2000):
     return p
 
 
-async def chunk(p, size=5120):
-    await p._handle_audio_output(base64.b64encode(b'\x01\x00' * (size // 2)).decode(), mime_type='audio/pcm;rate=16000')
+async def chunk(p, size=5120, sample=1):
+    await p._handle_audio_output(base64.b64encode(struct.pack('<h', sample) * (size // 2)).decode(), mime_type='audio/pcm;rate=16000')
 
 
 def playback_holes(events):
@@ -50,16 +51,19 @@ def playback_holes(events):
 @pytest.mark.parametrize('trace', json.loads((Path(__file__).parent / 'fixtures/calendly_recap_arrival_traces.json').read_text()))
 async def test_recorded_recap_jitter_drains_without_speech_gaps(trace):
     async def replay(prefill):
-        events, clock = [], [0]
+        events, clock, received, expected = [], [0], [], []
         async def callback(event):
             if event['type'] == 'AgentAudio':
                 events.append((clock[0], len(event['data'])))
+                received.append(event['data'])
         p = provider(callback, prefill)
-        for row in trace:
+        for index, row in enumerate(trace):
             clock[0] = row['arrival_ms']
-            await chunk(p, row['bytes'])
+            expected.append(struct.pack('<h', index + 1) * (row['bytes'] // 2))
+            await chunk(p, row['bytes'], index + 1)
         await p._flush_output_prefill()
         assert sum(size for _, size in events) == sum(row['bytes'] for row in trace)
+        assert b''.join(received) == b''.join(expected)
         return playback_holes(events)
     assert await replay(0) >= 700  # Reproduces the old receive/playback gap.
     assert await replay(2000) == 0
