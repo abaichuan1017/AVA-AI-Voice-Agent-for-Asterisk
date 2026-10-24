@@ -17933,7 +17933,11 @@ class Engine:
                                     # Handle non-terminal tools (e.g., request_transcript)
                                     # Feed result back to LLM for continuation
                                     if not result.get("will_hangup") and canonical_tool not in ("blind_transfer", "live_agent_transfer"):
-                                        tool_result_msg = result.get("message", f"Tool {name} executed successfully.")
+                                        from src.tools.adapters.sanitize import prepare_pipeline_tool_result
+                                        tool_result_msg, continuation_context, continuation_options = prepare_pipeline_tool_result(
+                                            name, result,
+                                            llm_options if result.get("internal_notification") else pipeline.llm_options,
+                                        )
                                         # Tool protocol messages are LLM context only. Keep
                                         # persisted conversation_history transcript-only.
                                         llm_context_history = list(conversation_history)
@@ -17949,12 +17953,15 @@ class Engine:
                                         
                                         # Trigger LLM to generate follow-up response
                                         try:
-                                            context_for_llm = {"prior_messages": _sanitize_for_llm(llm_context_history)}
+                                            context_for_llm = {
+                                                "prior_messages": _sanitize_for_llm(llm_context_history),
+                                                **continuation_context,
+                                            }
                                             llm_response = await pipeline.llm_adapter.generate(
                                                 call_id,
                                                 "",  # Empty transcript - tool result already in context
                                                 context_for_llm,
-                                                pipeline.llm_options
+                                                continuation_options,
                                             )
                                             if llm_response:
                                                 # Handle text response if present
