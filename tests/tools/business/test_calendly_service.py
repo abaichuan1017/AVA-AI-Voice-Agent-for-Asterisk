@@ -159,6 +159,17 @@ async def test_verify_needs_candidate_or_saved_token_and_does_not_require_enable
         await service.verify()
 
 
+async def test_setup_can_preview_while_paused_but_cannot_submit(setup):
+    store, service, fake, cfg = setup
+    store.update_connection(store.connection()['revision'], enabled=False)
+    params = await propose(service, fake, cfg, operation='setup:preview', setup=True)
+    with pytest.raises(CalendlyError, match='connection_disabled'):
+        await service.book(cfg, 'setup:preview', params)
+    with pytest.raises(CalendlyError, match='connection_disabled'):
+        await propose(service, fake, cfg)
+    assert fake.posts == 0 and store.prior('setup:preview') is None
+
+
 async def test_lost_response_reconciles_after_restart_without_post(setup):
     store, service, fake, cfg = setup
     conn = store.connection()

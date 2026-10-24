@@ -121,7 +121,9 @@ class CalendlyService:
         return entry
 
     async def slots(self, cfg: dict, operation: str, key: str, start: str, end: str, tz: str, *, setup=False) -> dict:
-        conn, client = await self.credentials(admission=True)
+        # Authenticated setup can preview times before the operator enables
+        # submissions. Voice offers and every booking still require admission.
+        conn, client = await self.credentials(admission=not setup)
         try:
             ZoneInfo(tz)
         except (ValueError, ZoneInfoNotFoundError):
