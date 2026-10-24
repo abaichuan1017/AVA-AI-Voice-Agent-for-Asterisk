@@ -785,7 +785,7 @@ async def get_backend_capabilities():
     ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
     
     try:
-        async with websockets.connect(ws_url, open_timeout=5) as ws:
+        async with websockets.connect(ws_url, open_timeout=5, proxy=None) as ws:
             auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
             if auth_token:
                 await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
@@ -881,7 +881,7 @@ async def get_local_ai_status():
     ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
     
     try:
-        async with websockets.connect(ws_url, open_timeout=5) as ws:
+        async with websockets.connect(ws_url, open_timeout=5, proxy=None) as ws:
             auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
             if auth_token:
                 await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
@@ -962,7 +962,7 @@ async def switch_model(request: SwitchModelRequest):
         """Try to hot-switch via local-ai-server websocket. Returns response dict on success, None on failure."""
         ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
         try:
-            async with websockets.connect(ws_url, open_timeout=5) as ws:
+            async with websockets.connect(ws_url, open_timeout=5, proxy=None) as ws:
                 auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
                 if auth_token:
                     await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
@@ -980,7 +980,7 @@ async def switch_model(request: SwitchModelRequest):
 
     async def _fetch_status() -> Optional[Dict[str, Any]]:
         ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
-        async with websockets.connect(ws_url, open_timeout=5) as ws:
+        async with websockets.connect(ws_url, open_timeout=5, proxy=None) as ws:
             auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
             if auth_token:
                 await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
@@ -1713,7 +1713,7 @@ async def list_backends():
     ws_url = get_setting("LOCAL_AI_WS_URL", "ws://127.0.0.1:8765")
     auth_token = get_setting("LOCAL_WS_AUTH_TOKEN", "")
     try:
-        async with websockets.connect(ws_url, close_timeout=5) as ws:
+        async with websockets.connect(ws_url, close_timeout=5, proxy=None) as ws:
             if auth_token:
                 await ws.send(json.dumps({"type": "auth", "token": auth_token}))
                 await ws.recv()
@@ -1730,7 +1730,7 @@ async def get_backend_schema(backend_type: str, backend_name: str):
     ws_url = get_setting("LOCAL_AI_WS_URL", "ws://127.0.0.1:8765")
     auth_token = get_setting("LOCAL_WS_AUTH_TOKEN", "")
     try:
-        async with websockets.connect(ws_url, close_timeout=5) as ws:
+        async with websockets.connect(ws_url, close_timeout=5, proxy=None) as ws:
             if auth_token:
                 await ws.send(json.dumps({"type": "auth", "token": auth_token}))
                 await ws.recv()

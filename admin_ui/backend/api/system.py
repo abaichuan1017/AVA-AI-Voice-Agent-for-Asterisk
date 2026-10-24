@@ -1761,7 +1761,7 @@ async def get_system_health():
                     # ai_engine HTTP probe — localhost handshake can hit ~1s
                     # under audio-processing load, so 2.5s was too tight.
                     # See sibling comment in check_ai_engine.
-                    async with websockets.connect(uri, open_timeout=5.0) as websocket:
+                    async with websockets.connect(uri, open_timeout=5.0, proxy=None) as websocket:
                         logger.debug("Local AI connected, sending status...")
                         auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
                         if auth_token:
