@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dependencies:** update the Admin frontend follow-redirects lockfile to 1.16.1,
+  engine aiohttp to 3.14.4, and Admin FastAPI/Pydantic to 0.143.3/2.14.1.
+
 - **Tools configuration:** replace the expanded built-in settings page with a
   searchable tool list and dedicated editors. Keep call-phase navigation,
   shared tool defaults, a read-only runtime catalog, and all existing settings.
