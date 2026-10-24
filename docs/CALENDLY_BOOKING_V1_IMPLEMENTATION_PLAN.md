@@ -2,6 +2,10 @@
 
 Status: implementation and automated validation completed on the Calendly v1 branch; voiprnd deployment and live account qualification are in progress. API/documentation research and repository design decisions were completed October 23, 2026. Live qualification remains required before opening the draft PR.
 
+Implementation checkpoint (October 23, 2026 PDT): feature commit `619e9020` is deployed on voiprnd through an isolated candidate checkout that preserves existing operator customizations and original configuration/private storage mounts. Initial restrictive source permissions were repaired; engine and Admin UI health recovered. Browser checks confirm a masked PAT field, disabled Save before verification, and an authenticated Calendly API. No PAT or live booking has been submitted yet.
+
+Automated evidence: core regression run 3,573 passed / 3 skipped / 176 CI-aligned exclusions; Admin backend 977 passed; frontend 506 passed, focused UI 27 passed, build and lint passed. Following the final cooldown/retention changes, the focused Calendly reliability suite passed 39 tests and authenticated API suite passed 4 tests. These are synthetic tests; live API compatibility, tracking readback, invitation/calendar observations, cleanup, and a real voice call remain acceptance gates. No draft PR is open. Local raw startup/recovery evidence is archived under `logs/archived/rca-20261024-030802` and `logs/archived/rca-20261024-031500` in the original operator workspace; private archives are excluded from Git.
+
 Prepared October 23, 2026. This document replaces the earlier broad Calendly scope for the first release. The agreed target is self-hosted AVA Core with one operator-owned Calendly connection and usable in-call appointment booking. OAuth, calendar administration, and a general booking-management application remain future work.
 
 Repository inspection baseline: `e8923779f066bccc7e8c185d007db65869c2a175`. The working checkout contains unrelated uncommitted calendar, provider, and other work. Reinspect current main and relevant changes before implementation; do not overwrite or incorporate unrelated work by accident.
