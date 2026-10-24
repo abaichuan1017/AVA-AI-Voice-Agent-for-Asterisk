@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -491,8 +492,20 @@ class ToolRuntimeGeneration:
         snapshot = copy.deepcopy(dict(config or {}))
         from src.tools.handoff_config import validate_handoff_config
         validate_handoff_config(snapshot.get("tools") or {})
+        from src.integrations.pushover import PushoverToolConfig
         registry = ToolRegistry.isolated()
         registry.initialize_default_tools()
+        for block in ("tools", "in_call_tools"):
+            for name, doc in (snapshot.get(block) or {}).items():
+                if isinstance(doc, dict) and doc.get("kind") == "pushover":
+                    try:
+                        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", str(name)) or registry.has(name) or str(name).startswith("mcp_"):
+                            raise ValueError()
+                        parsed = PushoverToolConfig.model_validate(doc)
+                        if (parsed.phase == "in_call") != (block == "in_call_tools"):
+                            raise ValueError()
+                    except Exception:
+                        raise ToolConfigPolicyError("Invalid managed Pushover tool configuration") from None
         registry.initialize_http_tools_from_config(snapshot.get("tools") or {})
         registry.initialize_in_call_http_tools_from_config(
             snapshot.get("in_call_tools") or {}, cache_key="global"

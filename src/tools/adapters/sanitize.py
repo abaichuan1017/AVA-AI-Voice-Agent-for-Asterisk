@@ -158,7 +158,7 @@ def sanitize_tool_result_for_json_string(
 
     if isinstance(result, dict) and result.get("internal_notification"):
         selected_keep_keys = tuple(dict.fromkeys((*selected_keep_keys,
-            "internal_notification", "delivery_status", "notification_deliveries", "error_code",
+            "internal_notification", "delivery_status", "notification_deliveries", "notification_service", "error_code",
             "summary_provider", "summary_model", "summary_status", "summary_duration_ms", "summary_error_code")))
 
     if not isinstance(result, dict):

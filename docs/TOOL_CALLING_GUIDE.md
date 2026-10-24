@@ -16,6 +16,7 @@ Complete guide to AI tool calling in Asterisk AI Voice Agent—enabling AI agent
 - [Available Tools](#available-tools)
 - [Calendar Booking Boundaries](#calendar-booking-boundaries)
 - [Pre-Call Tools (HTTP Lookups)](#pre-call-tools-http-lookups)
+- [Native Pushover Tools](#native-pushover-tools)
 - [In-Call HTTP Tools](#in-call-http-tools)
 - [Post-Call Tools (Webhooks)](#post-call-tools-webhooks)
 - [Configuration](#configuration)
@@ -443,6 +444,24 @@ AI: I'd be happy to help. Let me transfer you to support.
 ```
 
 ---
+
+## Native Pushover Tools
+
+Create a named **Pushover** tool through the same Pre-Call, In-Call or Post-Call
+editor as HTTP tools. Configure its application token, enabled user/group recipient
+rows, templates and optional summary; then Update tool and Save & Apply. Use normal
+Agent selection/global opt-outs. In-call descriptions and Agent prompts govern
+AI invocation; pre/post-call selection governs automatic lifecycle execution.
+
+Public defaults contain caller number and call ID, plus the observed outcome for
+completion. A summary appears only when enabled; CRM/company fields are optional
+custom templates. Saved custom bodies are preserved. One invocation generates its
+summary once and delivers the same content to enabled recipients, with individual
+delivery diagnostics. Preview never sends; recipient
+validation and tests require explicit clicks. The Tool Type selector links to the
+official Pushover documentation. See the complete [Pushover Tool guide](Pushover.md)
+for setup, multiple recipients/groups, prompts, templates, transfer policies,
+credentials, limits and testing.
 
 ## HTTP Template Safety and Compatibility
 

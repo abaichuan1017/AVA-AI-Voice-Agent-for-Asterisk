@@ -183,3 +183,16 @@ describe('InCallToolGroup', () => {
         expect(screen.queryByText('Strict redaction')).not.toBeInTheDocument();
     });
 });
+
+it('shows notification delivery independently from summary generation', () => {
+    render(<InCallToolGroup entries={[{name:'pushover_briefing',params:{update_key:'handoff'},result:'success',timestamp:'2026-10-23T12:00:00Z',duration_ms:50,summary_status:'timeout',summary_provider:'mock_llm',delivery_status:'accepted',notification_service:'pushover',notification_deliveries:{staff:{delivery_status:'accepted'}}}]} />);
+    expect(screen.getByText('Status: timeout')).toBeInTheDocument();
+    expect(screen.getByText('Delivery: accepted')).toBeInTheDocument();
+    expect(screen.getByText('staff: accepted')).toBeInTheDocument();
+    expect(screen.getByText(/not displayed or read/)).toBeInTheDocument();
+});
+
+it('does not attach Pushover acknowledgement semantics to calendar delivery', () => {
+    render(<InCallToolGroup entries={[{name:'microsoft_calendar',params:{},result:'success',timestamp:'2026-10-23T12:00:00Z',duration_ms:5,delivery_status:'unknown'}]} />);
+    expect(screen.queryByText(/queued by Pushover/)).not.toBeInTheDocument();
+});

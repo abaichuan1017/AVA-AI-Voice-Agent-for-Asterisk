@@ -244,6 +244,12 @@ class PreCallContext:
     # System access
     config: Any = None  # Config dict
     ari_client: Any = None  # ARIClient instance (for hold audio playback)
+
+    pre_call_results: Dict[str, str] = field(default_factory=dict)
+    call_metadata: Dict[str, str] = field(default_factory=dict)
+    execution_results: Dict[str, Any] = field(default_factory=dict)
+    notification_state: Any = None
+
     
     def get_config_value(self, key: str, default: Any = None) -> Any:
         """Get configuration value with dot notation support."""
@@ -309,6 +315,10 @@ class PostCallContext:
     # fields while exposing final selected values to post-call tools.
     call_metadata: Dict[str, str] = field(default_factory=dict)
     
+    execution_results: Dict[str, Any] = field(default_factory=dict)
+    transfer_destination: Optional[str] = None
+    notification_state: Any = None
+
     def to_payload_dict(self) -> Dict[str, Any]:
         """
         Convert context to a dictionary suitable for webhook payloads.

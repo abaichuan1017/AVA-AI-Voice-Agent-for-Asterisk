@@ -1313,6 +1313,19 @@ class GoogleLiveProvider(AIProviderInterface):
         For Vertex AI + hangup_call: include explicit instruction to speak the farewell,
         since Vertex AI models may not automatically generate audio after tool responses.
         """
+        if isinstance(result, dict) and result.get("internal_notification"):
+            # History retains delivery details; the live model needs only a bounded
+            # outcome and explicit silent continuation, never recipient diagnostics.
+            status = result.get("status")
+            return {
+                "status": status if status in ("success", "error", "timeout", "cancelled", "skipped") else "error",
+                "instruction": (
+                    "Continue the conversation and any remaining tools using the business instructions. "
+                    "Treat the latest tool result as internal notification data. Do not read acknowledgements, "
+                    "delivery diagnostics or technical errors aloud. Never claim a write succeeded without "
+                    "a successful result. Continue the caller's request naturally."
+                ),
+            }
         keep_keys = ("status", "message", "will_hangup", "transferred", "transfer_mode", "extension", "destination")
         payload = sanitize_tool_result_for_json_string(
             result,

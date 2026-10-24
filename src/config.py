@@ -1356,6 +1356,9 @@ class AppConfig(BaseModel):
     # P1: profiles/contexts for transport orchestration
     profiles: Dict[str, Any] = Field(default_factory=dict)
     contexts: Dict[str, Any] = Field(default_factory=dict)
+    # Preserve settings from the unreleased integration-panel prototype for rollback.
+    # Named tools are the only executable Pushover configuration.
+    pushover: Dict[str, Any] = Field(default_factory=dict)
     # Tool calling configuration (v4.1)
     tools: Dict[str, Any] = Field(default_factory=dict)
     # In-call HTTP tool definitions (Milestone 24)

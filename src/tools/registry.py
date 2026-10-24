@@ -9,6 +9,7 @@ from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolPhase, PreCal
 import logging
 import hashlib
 import json
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +657,27 @@ Tool Definitions:
         self._initialized = True
         logger.info(f"🛠️  Initialized {len(self._tools)} tools")
     
+    def _register_pushover_tool_from_config(self, name: str, config: Dict[str, Any], *, in_call: bool) -> None:
+        """Fail closed for legacy/global and per-agent native-tool initialization."""
+        from src.tools.pushover import PushoverTool
+
+        if (
+            not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", str(name))
+            or self.has(name) or name in self.TOOL_ALIASES or str(name).startswith("mcp_")
+        ):
+            logger.warning("Rejected Pushover tool: reserved or invalid name")
+            return
+        try:
+            tool = PushoverTool(name, config)
+        except Exception:
+            # Validation errors can contain operator-entered content. Do not log it.
+            logger.warning("Rejected invalid Pushover tool configuration")
+            return
+        if (tool.phase == "in_call") != in_call:
+            logger.warning("Rejected Pushover tool: invalid phase for configuration block")
+            return
+        self.register_instance(tool)
+
     def initialize_http_tools_from_config(self, tools_config: Dict[str, Any]) -> None:
         """
         Initialize HTTP lookup and webhook tools from YAML config.
@@ -677,6 +699,10 @@ Tool Definitions:
             
             kind = tool_config.get('kind', '')
             
+            if kind == 'pushover':
+                self._register_pushover_tool_from_config(tool_name, tool_config, in_call=False)
+                continue
+
             if kind == 'generic_http_lookup':
                 try:
                     from src.tools.http.generic_lookup import create_http_lookup_tool
@@ -737,6 +763,10 @@ Tool Definitions:
                     tool_name,
                 )
                 kind = 'in_call_http_lookup'
+
+            if kind == 'pushover':
+                self._register_pushover_tool_from_config(tool_name, tool_config, in_call=True)
+                continue
 
             if kind == 'in_call_http_lookup':
                 try:
