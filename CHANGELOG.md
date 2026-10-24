@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Admin dependencies:** update WebSockets to 17.3, Radix Alert Dialog to 1.2.1,
+  Testing Library user-event to 14.6.8, and PostCSS to 8.5.31. Retain the current
+  React Refresh plugin pending the separate ESLint migration.
+
 - **Dependencies:** update the Admin frontend follow-redirects lockfile to 1.16.1,
   engine aiohttp to 3.14.4, and Admin FastAPI/Pydantic to 0.143.3/2.14.1.
 
