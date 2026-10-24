@@ -11,6 +11,33 @@ Male/female presets are UI metadata, not TTS voice settings. Existing agents dis
 male AVA until an operator selects another preset. The UI does not infer the voice's
 gender. A custom image overrides the picture; the preset remains its removal fallback.
 
+## What existing operators will experience
+
+- Their agents, default selection, enabled state, prompts, voices and tool policies
+  remain in place. The first start adds two nullable appearance columns; there is
+  no setup wizard or required per-agent configuration.
+- Agents initially show the male AVA mascot, even if their configured voice is
+  female. Operators can select Female in General settings. This is a visual label,
+  not automatic voice detection or a change to the TTS provider.
+- Edit now opens a full page with General, Conversation, Tools and Advanced
+  sections. Existing tool permissions, including Calendly appointment access,
+  remain editable in Tools. The card's configured-tool summary links there.
+- Card/list preference is saved in that browser. Search and filters are temporary.
+  Configured-tool counts describe configuration, not verified tool availability.
+- Uploads are saved only with **Save changes**. A custom image stays visible when
+  switching the male/female fallback; **Use default image** removes the override.
+  Images must be PNG, JPEG or WebP, at most 2 MiB and 16 million pixels. They are
+  resized to at most 256×256; metadata and animation are not retained.
+- Save open edits before deployment. Admin UI briefly disconnects during its
+  container replacement; running calls continue in the unchanged engine. An old
+  browser tab can retain the previous UI until refreshed. Hard-refresh after the
+  deployment (or a rollback); a cached lazy-loaded page may otherwise fail to load.
+  Existing credentials and the JWT secret are retained, so this change does not
+  deliberately log users out; an already expired session still requires sign-in.
+- On rollback, new editor deep links are unavailable in the old UI; return to
+  `/agents`. Appearance is hidden by the old UI but retained in SQLite for a later
+  re-upgrade. Do not restore the database just to roll back the application.
+
 ## Storage and compatibility
 
 - `AgentsStore` adds nullable `avatar_preset` and `avatar_image` TEXT columns only.
@@ -119,3 +146,45 @@ image validation/normalization, omitted-vs-null PATCH behavior, YAML reconciliat
 SQLite online backup/restore, changed-field saves and blocked browser navigation.
 The predecessor store is also exercised against an upgraded DB for edit/create and
 re-upgrade compatibility. Browser checks use an isolated sample database, not voiprnd.
+
+## voiprnd deployment record — 2026-10-24
+
+- Waited for CI, Regression Hardening, CodeQL and Admin UI URL Validation to pass
+  on main `198a4aab9c117c5667f9546a82bfd00693ad4ae9` before merging it into PR #772.
+  The merge retains Calendly appointment access in the routed Tools section.
+- Deployed application revision `7ef4670487a39829e544b53db8cc019cf7d1c73b`.
+  Its draft CI/PR gate and CodeQL passed. The merged frontend passed all 529 tests
+  and a production build; 104 focused backend/store/API/engine-resolution tests passed.
+- Image: `ava-admin-ui:agents-experience-7ef46704`, digest
+  `sha256:5b32e09188ff5ebc8bc22b246809f9bd3d35f1becd52b1bb6e87b2f084a0109d`.
+  Runtime verified as Python 3.11.17 and Pillow 13.0.0. Image decoding is restricted
+  to the declared supported format before parsing.
+- Source is an isolated checkout at
+  `/root/aava-candidates/agents-experience-7ef46704`. The original dirty checkout
+  and the active Calendly engine source were retained. Admin UI keeps the existing
+  config, secrets, environment, data and media mounts. Resolved Compose differences
+  were checked to contain only the Admin image, build context and project source mount.
+- Backup: `/root/aava-backups/agents-experience-20261024T210203Z/` (private directory).
+  Contains a SQLite online backup with a successful integrity check, private row and
+  config baselines, configuration archive, container/Compose snapshots and build logs.
+  The host Python/SQLite is too old for this DB; the backup uses the running Admin
+  container's SQLite API. Do not use the host SQLite client to manipulate this store.
+- Rollback is prepared at the backup directory's `rollback-admin.sh`; it recreates
+  only Admin UI using retained image `ava-admin-ui:agents-rollback-20261024T210203Z`.
+  It keeps the live DB. A separate copy of the backup was upgraded, opened/edited by
+  that exact old image, and re-upgraded successfully with custom appearance intact.
+- Post-deployment checks at 21:15 UTC: all 15 original agent rows match every
+  pre-upgrade field, both new columns are null, DB integrity is `ok`, all backed-up
+  configuration files have identical content hashes, and legacy resource-policy
+  promotion changed zero rows. Neither engine container ID/start time changed;
+  engine config hash/load time are unchanged and ARI remains connected. There were
+  zero active calls at the observed checkpoints. No calls were originated for testing.
+- Admin health, nested-route serving, default mascot assets and unauthenticated API
+  rejection passed. Startup completed without error/traceback/critical log entries.
+  The deployed login page loads in the browser. **Authenticated live Agents UI
+  acceptance remains pending an operator sign-in**; local browser tests do not
+  substitute for that final check. No live agent was created or edited for testing.
+- This is a detached staging candidate, not a merged release. Use the recorded
+  Compose deployment/rollback commands for this candidate; do not use the general
+  Updates page to switch revisions during acceptance. Keep the PR draft until live
+  UI acceptance and the final repository review gate are complete.
