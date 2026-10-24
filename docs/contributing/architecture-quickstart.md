@@ -13,6 +13,17 @@ and the [architecture deep dive](architecture-deep-dive.md).
 
 ## Services and ownership
 
+### v7.7 integration state
+
+Calendly's dedicated journal owns durable booking admission/reconciliation;
+uncertain writes do not replay. Its private credentials and journal are not
+automatically restored with application rollback. Pushover instead uses named
+phase tools and best-effort per-call duplicate control, not a durable outbox.
+Summary generation is invocation-local, selected-provider only. Agent avatars
+remain SQLite appearance data excluded from runtime persona YAML.
+See [integration backups](../INTEGRATION_BACKUPS.md), [Calendly](../Calendly-calendar-tool.md),
+[Pushover](../Pushover.md), and [summaries](../In-Call-Summaries.md).
+
 | Component | Responsibility |
 | --- | --- |
 | `ai_engine` | ARI events, call routing, media, provider/pipeline sessions, tools and Call History |

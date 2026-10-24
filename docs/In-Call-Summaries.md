@@ -1,5 +1,10 @@
 # In-call HTTP summaries
 
+See the [v7.7.0 validation matrix](baselines/golden/v7.7.0-validation-matrix.md)
+for existing automated evidence and the explicit waiver of further live testing.
+A summary covers the AVA conversation available at invocation, not a later
+human-to-human conversation after transfer.
+
 In Tools → In-call HTTP, enable **Generate AI Summary**, select a configured LLM,
 and set the summary prompt, maximum words and timeout. Only that provider receives
 the transcript. The prompt supports `{max_words}`. Saving these tools uses the
