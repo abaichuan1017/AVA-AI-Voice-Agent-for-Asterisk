@@ -16,7 +16,9 @@ CI is the hard gate for code quality (unit tests + lint/compile checks). Real-ca
 
 For v7.7.0, use the [current validation matrix](baselines/golden/v7.7.0-validation-matrix.md).
 The maintainer explicitly approved reuse of the existing evidence and waived
-additional deployment, live-call, runtime and upgrade testing for this release.
+the CI Gate's exact-revision live-call evidence and additional deployment,
+live-call, runtime and upgrade testing for this release. This also waives the
+successful-call requirement below for v7.7.0.
 The rows remain reused evidence or waived/untested, not exact-candidate passes.
 Required CI, automated checks and security review are not waived. The backup
 safety PR must merge first; refresh and revalidate the release PR against that

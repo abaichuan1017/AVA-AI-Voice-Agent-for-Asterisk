@@ -73,8 +73,9 @@ every service. Host `./data/` mounts at `/app/data/`; defaults include
   Legacy YAML Contexts import atomically only into an empty store; there is no
   live YAML persona fallback. See [Agents](docs/AGENTS.md).
 - **Appearance:** Agent avatar presets/images live in nullable `agents.db` columns,
-  never select a voice, and are excluded from runtime YAML. Back up SQLite, not
-  just YAML exports; see [Agents rollout](docs/AGENTS_EXPERIENCE_ROLLOUT.md).
+  never select a voice, and are ignored by runtime routing. The recovery exporter
+  omits these columns but may re-emit legacy avatar keys retained in `extra_json`.
+  Back up SQLite, not just YAML; see [Agents rollout](docs/AGENTS_EXPERIENCE_ROLLOUT.md).
 - **Per-agent behavior:** `src/core/agent_store.py` resolves a `ContextConfig` from
   `src/core/transport_orchestrator.py`; thread new fields through storage, API/UI,
   validation, and the engine's `provider_context`. Per-call `AI_PROVIDER` and

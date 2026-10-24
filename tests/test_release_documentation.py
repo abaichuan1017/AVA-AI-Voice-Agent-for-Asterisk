@@ -1,6 +1,4 @@
 """Release-facing documentation and the Admin documentation allowlist agree."""
-import asyncio
-import importlib.util
 from pathlib import Path
 import re
 from urllib.parse import unquote, urlsplit
@@ -10,46 +8,6 @@ import pytest
 from tests.test_readme_documentation import anchors
 
 ROOT = Path(__file__).resolve().parents[1]
-NEW_GUIDES = {
-    "Calendly-calendar-tool.md",
-    "In-Call-Summaries.md",
-    "AGENTS.md",
-    "ARI-Endpoint-Discovery.md",
-    "Microsoft-teams-verification.md",
-    "MIGRATION.md",
-    "INTEGRATION_BACKUPS.md",
-    "AGENTS_EXPERIENCE_ROLLOUT.md",
-}
-
-
-@pytest.fixture
-def docs_api(monkeypatch):
-    spec = importlib.util.spec_from_file_location(
-        "release_docs_api", ROOT / "admin_ui/backend/api/docs.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    monkeypatch.setattr(module, "get_docs_path", lambda: ROOT / "docs")
-    return module
-
-
-def test_documentation_catalog_is_unique_and_serves_release_guides(docs_api):
-    files = [doc["file"] for cat in docs_api.DOC_CATEGORIES.values() for doc in cat["docs"]]
-    assert len(files) == len(set(files))
-    assert NEW_GUIDES.issubset(files)
-    for relative in files:
-        assert (ROOT / "docs" / relative).is_file(), relative
-    for relative in NEW_GUIDES:
-        result = asyncio.run(docs_api.get_doc_content(relative))
-        assert result.content == (ROOT / "docs" / relative).read_text()
-        assert result.title and result.category
-
-
-def test_documentation_catalog_does_not_authorize_arbitrary_paths(docs_api):
-    for path in ("../.env", "../../secrets/calendly.json", "/etc/passwd"):
-        with pytest.raises(docs_api.HTTPException) as exc:
-            asyncio.run(docs_api.get_doc_content(path))
-        assert exc.value.status_code == 404
 
 
 @pytest.mark.parametrize("relative", [

@@ -77,9 +77,7 @@ If you omit these, the engine selects the default Agent/provider using the prece
 asterisk -rx "dialplan reload"
 ```
 
-## Pipelines (Optional / Operator-Defined)
-
-### Google Live playback prefill (v7.7)
+## Google Live playback prefill (v7.7)
 
 `providers.google_live.playback_prefill_ms` is opt-in and defaults to `0`.
 It accepts `0`–`3000` milliseconds and can smooth streamed playback at the cost
@@ -88,6 +86,8 @@ a guarantee against provider/network stalls. Save the provider configuration
 and restart the engine to apply it; leave it at zero unless your deployment
 needs buffering. See the [configuration reference](Configuration-Reference.md)
 for the separate greeting timing controls and audio profile settings.
+
+## Pipelines (Optional / Operator-Defined)
 
 Pipeline names are **not shipped/validated by default**. If you want a Google-based pipeline, you define it under `pipelines:` and then select it via `default_provider` or `AI_PROVIDER`.
 

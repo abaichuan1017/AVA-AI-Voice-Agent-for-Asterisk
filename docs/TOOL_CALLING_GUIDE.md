@@ -459,8 +459,10 @@ management and group/pooled appointments are excluded. See [setup and recovery](
 ## In-call Generated Summaries
 
 Configure an existing HTTP tool's LLM, timeout and failure policy, using protected
-summary placeholders. It summarizes the AVA call so far, not the human conversation
-after transfer. No provider fallback or blind retry is introduced. See [summary contracts](In-Call-Summaries.md).
+summary placeholders. It snapshots available conversation history at invocation,
+without filtering recorded turns by transfer state; unobserved human conversation
+cannot be summarized. Invoke before transfer for a pre-transfer snapshot. No
+provider fallback or blind retry is introduced. See [summary contracts](In-Call-Summaries.md).
 
 ## Native Pushover Tools
 

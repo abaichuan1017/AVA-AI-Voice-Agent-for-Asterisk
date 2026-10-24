@@ -1,6 +1,12 @@
 # Asterisk AI Voice Agent - Installation and Upgrade Guide (v7.7)
 
 This guide covers fresh installations and the supported upgrade path to v7.7.0.
+Release-pinned commands require the v7.7.0 tag and artifacts to be published.
+Until then, stable operators should use the latest published release's guide.
+For an explicitly authorized pre-release upgrade, maintainers can substitute
+`--ref main` or `AAVA_RECOVERY_REF=main` only after #775 has merged and that exact
+main revision has passed the required checks. This is development code, not a
+published release; never silently fall back from a missing release tag.
 For release-specific behavior changes, also read the
 [v7.7.0 migration notes](MIGRATION.md#v764-to-v770). Operators upgrading from
 v7.3.x or earlier must also follow the [v7.4 Agent migration](MIGRATION.md#v73x-to-v740).
@@ -37,7 +43,7 @@ before using UI-driven integration backups, or use the documented host recovery
 path with compatible Python. A CLI self-update cannot add Python to an old image.
 
 > ### ⚠️ Upgrading from 6.x? v7.0.0 introduced breaking changes — read first
-> (v7.6 includes them; if you are already on 7.x this is an in-place upgrade.)
+> (v7.7 includes them; if you are already on 7.x this is an in-place upgrade.)
 > Before upgrading from 6.x, review the **Upgrade Notes** at the top of the
 > [v7.0.0 CHANGELOG entry](../CHANGELOG.md) and the
 > [Agents migration guide](OPERATOR_MIGRATION.md). In short:
@@ -555,7 +561,7 @@ agent setup
 
 **Best for:** Headless servers, scripted deployments, CLI preference
 
-> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v6.5.4.
+> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v7.7.0.
 
 ---
 

@@ -15,8 +15,9 @@ Calendly's integration journal durably claims submissions before one remote POST
 lost/ambiguous results require positive reconciliation or staff, never blind replay.
 Pushover is a named pre/in/post-call tool with bounded, per-recipient outcomes and
 best-effort call-local duplicate control; there is no durable notification outbox.
-In-call summaries receive a snapshot of the AVA conversation and cannot observe a
-later human conversation. Preserve these differences in future adapters.
+In-call summaries snapshot recorded history at invocation without transfer-state
+filtering; they cannot infer unobserved human conversation. Preserve these
+differences in future adapters.
 See [Calendly](../Calendly-calendar-tool.md), [Pushover](../Pushover.md),
 [summaries](../In-Call-Summaries.md), and [backup boundaries](../INTEGRATION_BACKUPS.md).
 

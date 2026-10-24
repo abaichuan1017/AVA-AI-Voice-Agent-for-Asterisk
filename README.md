@@ -42,6 +42,12 @@ instead of cloning another installation.
 
 On the AVA host:
 
+Run the pinned commands below only after v7.7.0 appears in
+[GitHub Releases](https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/releases).
+Before publication, use the latest published release for stable installations.
+For maintainer source evaluation only (unstable):
+`git clone --branch main https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git`.
+
 ```bash
 git clone --branch v7.7.0 https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk.git
 cd AVA-AI-Voice-Agent-for-Asterisk

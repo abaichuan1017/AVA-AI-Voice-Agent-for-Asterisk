@@ -20,7 +20,8 @@
 - **[WebSocket Transport](WebSocket-Transport.md)** - Opt-in Asterisk Media WebSocket setup, authenticated loopback/WSS topology, qualification, and rollback
 - **[Caller Inactivity Watchdog](Configuration-Reference.md#caller-inactivity-no_input)** - 30-second inbound silence protection, per-agent overrides, and safe terminal playback (v7.3.1+)
 - **[Agents](AGENTS.md)** - v7.4 Agent routing, dialplan selection, and per-Agent tool access
-- **[v7.7.0 Validation Matrix](baselines/golden/v7.7.0-validation-matrix.md)** - HTTP-template safety, farewell/transfer recovery, compatible Admin updates and release qualification
+- **[v7.7.0 Validation Matrix](baselines/golden/v7.7.0-validation-matrix.md)** - Integrations, Agents/Tools workflows, backup safety and bounded reuse of validation evidence
+- **[v7.6.4 Validation Matrix](baselines/golden/v7.6.4-validation-matrix.md)** - HTTP-template safety, farewell/transfer recovery and compatible Admin updates
 - **[v7.6.3 Validation Matrix](baselines/golden/v7.6.3-validation-matrix.md)** - Provider recovery, Local AI/MCP, security, documentation and release qualification
 - **[v7.6.2 Validation Matrix](baselines/golden/v7.6.2-validation-matrix.md)** - Gemini 3.8 Live, Microsoft booking acceptance, Call History filter parity, and Admin UI evidence
 - **[v7.6.1 Validation Matrix](baselines/golden/v7.6.1-validation-matrix.md)** - Fish Audio, calendar and credential handling, transfer safety, and dependency security evidence

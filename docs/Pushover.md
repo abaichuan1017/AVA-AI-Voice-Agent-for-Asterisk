@@ -70,6 +70,11 @@ description and template; in-call tools are not tied to transfers.
   They can summarize the finalized AVA conversation and observed outcome. Existing
   post-call timing is unchanged; unobserved human conversations are unavailable.
 
+Summary snapshots include whatever conversation turns AVA recorded at invocation;
+there is no transfer-state filter or guaranteed cutoff. Invoke before transfer
+when a pre-transfer-only summary is needed. No later human conversation is inferred
+from a transfer outcome, and no general after-transfer hook is introduced.
+
 When migrating another connector, disable only its equivalent notification sends
 for the pilot agent and preserve its CRM/email functions to avoid duplicate sends.
 The unreleased integration-panel prototype's top-level `pushover` document is
