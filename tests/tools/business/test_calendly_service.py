@@ -296,6 +296,39 @@ async def test_no_negative_proof_or_retry(setup, failure):
     assert fake.posts == 1
 
 
+@pytest.mark.parametrize('malformed', ['missing_end', 'bad_membership', 'bad_event', 'bad_invitee'])
+async def test_malformed_recovery_reaches_staff_without_reposting(setup, malformed):
+    store, service, fake, cfg = setup
+    store.update_connection(store.connection()['revision'], qualified=True)
+    fake.lost = True
+    result = await service.book(cfg, 'call:one', await propose(service, fake, cfg))
+    key = result['attempt_reference']
+    if malformed == 'missing_end': fake.event.pop('end_time')
+    if malformed == 'bad_membership': fake.event['event_memberships'] = [None]
+    request = fake.request
+    async def damaged(method, path, **kwargs):
+        value = await request(method, path, **kwargs)
+        if malformed == 'bad_event' and path == '/scheduled_events': value['collection'] = [None]
+        if malformed == 'bad_invitee' and path.endswith('/invitees'): value['collection'] = ['invalid']
+        return value
+    fake.request = damaged
+    for _ in range(3):
+        await due(store, key)
+        result = await service.reconcile(key)
+        assert result['code'] == 'invalid_response'
+    assert result['reservation_status'] == 'needs_operator' and fake.posts == 1
+
+
+async def test_malformed_qualification_is_safe_and_never_qualifies(setup):
+    store, service, fake, cfg = setup
+    operation = 'setup:malformed'
+    result = await service.book(cfg, operation, await propose(service, fake, cfg, operation, setup=True))
+    fake.event.pop('end_time')
+    with pytest.raises(CalendlyError, match='invalid_response'):
+        await service.reconcile(result['attempt_reference'], qualification=True)
+    assert not store.connection()['qualified'] and fake.posts == 1
+
+
 async def test_unqualified_discovery_and_external_resolution(setup):
     store, service, fake, cfg = setup
     fake.lost = True
@@ -463,6 +496,26 @@ async def test_native_reference_only_approval_submits_exact_prepared_details_onc
     assert not session._calendly_confirmation
     assert await tool.execute(final, context) == result
     assert fake.posts == 1
+
+
+@pytest.mark.parametrize('selection,expected', [(None, 1), ([], 0)])
+async def test_null_native_selection_matches_binding_and_guidance(setup, monkeypatch, selection, expected):
+    from src.tools.business import calendly_calendar as native
+    from src.tools.context import ToolExecutionContext
+    from src.tools.runtime_guidance import build_in_call_tool_runtime_guidance
+    store, service, fake, cfg = setup
+    cfg['selected_appointments'] = selection
+    monkeypatch.setattr(native, 'CalendlyStore', lambda: store)
+    monkeypatch.setattr(native, 'CalendlyService', lambda _: service)
+    context = ToolExecutionContext(call_id='null-selection', config={'tools': {'calendly_calendar': cfg}})
+    tool = native.CalendlyCalendarTool()
+    result = await tool.execute({'action': 'list_appointment_types'}, context)
+    assert result['status'] == 'success' and len(result['appointment_types']) == expected
+    guidance = build_in_call_tool_runtime_guidance(context.config, ['calendly_calendar'])
+    assert ('consultation' in guidance) == bool(expected)
+    slots = await tool.execute({'action': 'get_available_slots', 'appointment_key': 'consultation', 'timezone': 'UTC'}, context)
+    assert slots['status'] == ('success' if expected else 'error')
+    assert fake.posts == 0
 
 
 @pytest.mark.parametrize('fault', ['missing_flags', 'changed_email', 'changed_name', 'wrong_reference', 'expired', 'missing_cache', 'cleanup', 'disabled'])

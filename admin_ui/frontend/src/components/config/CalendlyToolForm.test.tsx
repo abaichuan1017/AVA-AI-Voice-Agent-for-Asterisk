@@ -30,6 +30,17 @@ function mock(connected = true) {
 afterEach(() => { cleanup(); vi.resetAllMocks(); sessionStorage.clear(); });
 
 describe('Calendly guided setup', () => {
+    it('shows the request ID for matching pending calls to recovery', async () => {
+        mock();
+        const request = vi.mocked(axios.request).getMockImplementation()!;
+        vi.mocked(axios.request).mockImplementation(async r => r.url?.endsWith('/attempts')
+            ? { data: [{ id: 'request-ref-123', appointment_name: 'Demo', state: 'uncertain', updated: 1 }] }
+            : request(r));
+        render(<CalendlyToolForm config={{}} onChange={vi.fn()} onSave={vi.fn()} />);
+        await screen.findByText(/Alex · UTC/);
+        await userEvent.click(screen.getByRole('button', { name: 'Refresh pending requests' }));
+        expect(await screen.findByText('request-ref-123')).toBeInTheDocument();
+    });
     it('requires a candidate token for a first connection and allows checking a saved connection while paused', async () => {
         mock(false);
         const form = render(<CalendlyToolForm config={{}} onChange={vi.fn()} onSave={vi.fn()} />);

@@ -325,6 +325,7 @@ class CallHistoryStore:
                 try:
                     cursor = conn.cursor()
                     cursor.execute(self._CREATE_TABLE_SQL)
+                    cursor.execute("CREATE TABLE IF NOT EXISTS pending_calendly_purges (call_id TEXT PRIMARY KEY)")
                     self._ensure_schema_sync(conn)
                     for idx_sql in self._CREATE_INDEXES_SQL:
                         cursor.execute(idx_sql)
@@ -1025,17 +1026,19 @@ class CallHistoryStore:
                 conn = self._get_connection()
                 try:
                     cursor = conn.cursor()
-                    from src.core.calendly_store import scrub_deleted_calls
                     rows = cursor.execute("SELECT call_id FROM call_records WHERE id = ?", (record_id,)).fetchall()
-                    scrub_deleted_calls([row[0] for row in rows])
+                    cursor.executemany("INSERT OR IGNORE INTO pending_calendly_purges(call_id) VALUES(?)", [(row[0],) for row in rows])
                     cursor.execute("DELETE FROM call_records WHERE id = ?", (record_id,))
+                    deleted = cursor.rowcount > 0
                     conn.commit()
-                    return cursor.rowcount > 0
+                    return deleted
                 finally:
                     conn.close()
         
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _delete_sync)
+        deleted = await loop.run_in_executor(None, _delete_sync)
+        await self.retry_pending_calendly_purges()
+        return deleted
     
     async def delete_before(self, before_date: datetime) -> int:
         """Delete all records before a date. Returns count deleted."""
@@ -1047,20 +1050,57 @@ class CallHistoryStore:
                 conn = self._get_connection()
                 try:
                     cursor = conn.cursor()
-                    from src.core.calendly_store import scrub_deleted_calls
                     rows = cursor.execute("SELECT call_id FROM call_records WHERE start_time < ?", (before_date.isoformat(),)).fetchall()
-                    scrub_deleted_calls([row[0] for row in rows])
+                    cursor.executemany("INSERT OR IGNORE INTO pending_calendly_purges(call_id) VALUES(?)", [(row[0],) for row in rows])
                     cursor.execute(
                         "DELETE FROM call_records WHERE start_time < ?",
                         (before_date.isoformat(),)
                     )
+                    deleted = cursor.rowcount
                     conn.commit()
-                    return cursor.rowcount
+                    return deleted
                 finally:
                     conn.close()
         
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _delete_sync)
+        deleted = await loop.run_in_executor(None, _delete_sync)
+        await self.retry_pending_calendly_purges()
+        return deleted
+
+    async def retry_pending_calendly_purges(self) -> None:
+        """Retry bounded cross-store erasure without blocking history deletion.
+
+        Call IDs are queued atomically with deletion, so a crash or an unavailable
+        Calendly journal cannot lose the erasure obligation. No caller data is
+        copied to the queue. Scrub outside the history lock; remove only after
+        success. Repeated/concurrent scrubs are idempotent.
+        """
+        if not self._enabled:
+            return
+
+        def _retry_sync():
+            try:
+                with self._lock:
+                    conn = self._get_connection()
+                    try:
+                        calls = [r[0] for r in conn.execute("SELECT call_id FROM pending_calendly_purges LIMIT 100")]
+                    finally:
+                        conn.close()
+                if not calls:
+                    return
+                from src.core.calendly_store import scrub_deleted_calls
+                scrub_deleted_calls(calls)
+                with self._lock:
+                    conn = self._get_connection()
+                    try:
+                        conn.executemany("DELETE FROM pending_calendly_purges WHERE call_id=?", [(c,) for c in calls])
+                        conn.commit()
+                    finally:
+                        conn.close()
+            except Exception:
+                logger.warning("Calendly erasure deferred; history deletion completed and retry retained")
+
+        await asyncio.get_running_loop().run_in_executor(None, _retry_sync)
     
     async def get_stats(
         self,

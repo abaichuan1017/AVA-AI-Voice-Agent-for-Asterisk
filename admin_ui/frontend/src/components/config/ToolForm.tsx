@@ -1412,8 +1412,8 @@ const ToolForm = ({ config, contexts, hangupUsage, onChange, onContextsChange, o
         <div className="space-y-8">
             {section === 'calendly_calendar' && <CalendlyToolForm
                 config={config.calendly_calendar || {}}
-                onChange={value => onChange({ ...config, calendly_calendar: value })}
-                onSave={async value => { if (onSaveNow) await onSaveNow({ ...config, calendly_calendar: value }); }}
+                onChange={value => onChange({ ...latestConfigRef.current, calendly_calendar: value })}
+                onSave={async value => { if (onSaveNow) await onSaveNow({ ...latestConfigRef.current, calendly_calendar: value }); }}
             />}
             {/* AI Identity & General Settings */}
             <div hidden={section !== undefined && section !== 'defaults'} className="space-y-4 border-b border-border pb-6">

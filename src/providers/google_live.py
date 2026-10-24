@@ -1714,6 +1714,7 @@ class GoogleLiveProvider(AIProviderInterface):
         # Acknowledgment can arrive after the local flush. An old protocol
         # boundary must not commit terminal intent during that interval.
         self._locally_interrupted_response_id = self._audio_response_id
+        self._discard_output_prefill()
         for completed in self._generated_audio_turns:
             if completed["response_id"] == self._audio_response_id:
                 completed["interrupted"] = True
@@ -2142,6 +2143,9 @@ class GoogleLiveProvider(AIProviderInterface):
             # farewell audio, but never enqueue that post-hangup speech.
             if self._terminal_audio_cutoff_after_tool or self._closing or self._closed:
                 return
+            if (self.long_audio_playback_enabled and self._in_audio_burst
+                    and self._locally_interrupted_response_id == self._audio_response_id):
+                return  # Late chunks of the locally interrupted generation.
             self._last_audio_out_monotonic = time.monotonic()
             if self._hangup_fallback_armed:
                 self._hangup_fallback_audio_started = True
@@ -2247,14 +2251,20 @@ class GoogleLiveProvider(AIProviderInterface):
                 "encoding": target_encoding, "sample_rate": target_rate,
                 **({"audio_response_id": self._audio_response_id} if self.long_audio_playback_enabled else {}),
             }
-            if not self._output_prefill_ready:
-                self._output_prefill.append(event)
-                width = 1 if target_encoding in ("ulaw", "mulaw", "g711_ulaw") else 2
-                self._output_prefill_ms += len(output_audio) * 1000 / (target_rate * width)
-                if self._output_prefill_ms >= self.config.playback_prefill_ms or len(self._output_prefill) >= 512:
-                    await self._flush_output_prefill()
-            elif self.on_event:
-                await self.on_event(event)
+            epoch = self._output_prefill_epoch
+            async with self._output_prefill_lock:
+                # Immediate audio must wait behind reserve delivery too. An
+                # interruption/close can invalidate a chunk while it waits.
+                if epoch != self._output_prefill_epoch or self._closing or self._closed:
+                    return
+                if not self._output_prefill_ready:
+                    self._output_prefill.append(event)
+                    width = 1 if target_encoding in ("ulaw", "mulaw", "g711_ulaw") else 2
+                    self._output_prefill_ms += len(output_audio) * 1000 / (target_rate * width)
+                    if self._output_prefill_ms >= self.config.playback_prefill_ms or len(self._output_prefill) >= 512:
+                        await self._release_output_prefill()
+                elif self.on_event:
+                    await self.on_event(event)
 
         except Exception as e:
             logger.error(
@@ -2293,8 +2303,6 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _handle_turn_complete(self) -> None:
         """Handle turn completion."""
-        if not self.long_audio_playback_enabled or not self._generated_audio_turns:
-            await self._flush_output_prefill()
         had_audio = self._in_audio_burst
         turn_was_assistant = self._turn_has_assistant_output
         response_id = self._audio_response_id
@@ -2308,6 +2316,9 @@ class GoogleLiveProvider(AIProviderInterface):
                 # A normal audio turn must have generationComplete before
                 # turnComplete. Ignore a repeated old boundary during new audio.
                 return
+        if not self.long_audio_playback_enabled or not self._generated_audio_turns:
+            await self._flush_output_prefill()
+        if self.long_audio_playback_enabled:
             # Google sends ordered turn boundaries. Keep locally assigned IDs so
             # a delayed boundary for A cannot finish the engine's playback of B.
             if self._generated_audio_turns:

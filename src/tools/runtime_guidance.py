@@ -201,7 +201,9 @@ def build_in_call_tool_runtime_guidance(config: Dict[str, Any], allowed_tools: I
     if "calendly_calendar" in allowed:
         calendar = ((config or {}).get("tools") or {}).get("calendly_calendar") or {}
         inventory = calendar.get("appointments") or {}
-        keys = calendar.get("selected_appointments", list(inventory))
+        keys = calendar.get("selected_appointments")
+        if keys is None:
+            keys = list(inventory)
         sections.append("\n".join([
             "## Calendly booking",
             "- Trusted current UTC date/time: " + datetime.now(ZoneInfo("UTC")).isoformat(),

@@ -417,10 +417,13 @@ class CalendlyService:
                 else:
                     state = "confirmed" if event.get("status") == invitee.get("status") == "active" else "resolved_remote_cancelled"
                     await asyncio.to_thread(self.store.finish, key, state, public, private)
-        except (CalendlyError, TimeoutError) as exc:
+        except (CalendlyError, TimeoutError, KeyError, TypeError, AttributeError, ValueError) as exc:
             if qualification:
-                raise
-            code = exc.code if isinstance(exc, CalendlyError) else "check_timeout"
+                if isinstance(exc, (CalendlyError, TimeoutError)):
+                    raise
+                raise CalendlyError("invalid_response") from None
+            code = (exc.code if isinstance(exc, CalendlyError)
+                    else "check_timeout" if isinstance(exc, TimeoutError) else "invalid_response")
             state = "needs_operator" if row["passes"] >= 3 or code in {"discovery_not_qualified", "lookup_details_expired", "connection_changed"} else "uncertain"
             await asyncio.to_thread(self.store.finish, key, state, {**public, "code": code})
         return view(await asyncio.to_thread(self.store.attempt, key))
@@ -430,12 +433,18 @@ async def recovery_loop():
     """Only touch an already-created journal; disabled installations stay inert."""
     import os
     from pathlib import Path
+    last_cleanup = None
     while True:
         try:
             path = Path(os.getenv("CALENDLY_DB_PATH", "/app/data/operator/calendly.db"))
             if path.exists():
                 store = await asyncio.to_thread(CalendlyStore)
-                await asyncio.to_thread(store.cleanup)
+                if last_cleanup is None or time.monotonic() - last_cleanup >= 60:
+                    await asyncio.to_thread(store.cleanup)
+                    last_cleanup = time.monotonic()
+                if Path(os.getenv("CALL_HISTORY_DB_PATH", "/app/data/call_history.db")).exists():
+                    from src.core.call_history import get_call_history_store
+                    await get_call_history_store().retry_pending_calendly_purges()
                 service = CalendlyService(store)
                 for key in await asyncio.to_thread(store.due):
                     await service.reconcile(key)

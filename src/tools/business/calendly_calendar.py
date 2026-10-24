@@ -45,7 +45,9 @@ class CalendlyCalendarTool(Tool):
             cfg = resolve_scoped_tool_config(context, "calendly_calendar", lambda: {})
             if not cfg.get("enabled") or not context.call_id:
                 raise CalendlyError("tool_not_enabled")
-            allowed = cfg.get("selected_appointments", list((cfg.get("appointments") or {}).keys()))
+            allowed = cfg.get("selected_appointments")
+            if allowed is None:
+                allowed = list((cfg.get("appointments") or {}).keys())
             operation = "call:" + context.call_id
             store = await asyncio.to_thread(CalendlyStore)
             service = CalendlyService(store)

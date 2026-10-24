@@ -152,3 +152,58 @@ async def test_delayed_old_turn_boundary_does_not_release_new_generation():
     assert len(p._output_prefill) == 1
     await p._handle_audio_generation_complete()
     assert not p._output_prefill
+
+
+async def test_new_chunk_waits_behind_reserve_callback_in_fifo_order():
+    entered, release = asyncio.Event(), asyncio.Event()
+    samples = []
+    async def callback(event):
+        if event['type'] == 'AgentAudio':
+            samples.append(struct.unpack('<h', event['data'][:2])[0])
+            if len(samples) == 1:
+                entered.set()
+                await release.wait()
+    p = provider(callback)
+    await chunk(p, sample=1)
+    await chunk(p, sample=2)
+    flushing = asyncio.create_task(p._flush_output_prefill())
+    await entered.wait()
+    arriving = asyncio.create_task(chunk(p, sample=3))
+    await asyncio.sleep(0)
+    assert samples == [1] and not arriving.done()
+    release.set()
+    await asyncio.gather(flushing, arriving)
+    assert samples == [1, 2, 3]
+
+
+async def test_repeated_boundary_does_not_flush_new_response_reserve():
+    callback = AsyncMock()
+    p = provider(callback)
+    p.config.long_audio_playback_enabled = True
+    await chunk(p)
+    await p._handle_audio_generation_complete()
+    await p._handle_turn_complete()
+    await chunk(p)
+    count = callback.await_count
+    await p._handle_turn_complete()  # Duplicate A boundary during B.
+    assert callback.await_count == count
+    assert len(p._output_prefill) == 1
+    await p._handle_audio_generation_complete()
+    assert callback.await_count == count + 2
+
+
+async def test_local_interruption_discards_reserve_and_late_generation_chunks():
+    callback = AsyncMock()
+    p = provider(callback)
+    p.config.long_audio_playback_enabled = True
+    await chunk(p, sample=1)
+    old_response = p._audio_response_id
+    await p.handle_local_barge_in()
+    await chunk(p, sample=2)
+    await p._handle_audio_generation_complete()
+    assert not any(c.args[0]['type'] == 'AgentAudio' for c in callback.await_args_list)
+    await chunk(p, sample=3)
+    await p._handle_audio_generation_complete()
+    audio = [c.args[0] for c in callback.await_args_list if c.args[0]['type'] == 'AgentAudio']
+    assert len(audio) == 1 and audio[0]['audio_response_id'] > old_response
+    assert struct.unpack('<h', audio[0]['data'][:2])[0] == 3

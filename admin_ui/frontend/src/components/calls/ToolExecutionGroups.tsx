@@ -204,6 +204,7 @@ export const InCallToolGroup = ({ entries }: { entries: InCallToolCall[] }) => {
                         )}
                         <ToolDiagnosticsView entry={tool} />
                         {tool.name === 'calendly_calendar' && tool.reservation_status && <div className="mt-2 text-xs space-y-1">
+                            {tool.attempt_reference && <p className="break-all">Request reference: <span className="font-mono">{tool.attempt_reference}</span></p>}
                             <p>{tool.appointment_name} · {tool.start_datetime} · {tool.timezone}</p>
                             <p>Recorded outcome: {tool.reservation_status}. This is not a continuously synchronized booking status.</p>
                             <a className="text-primary underline" href="/tools?section=calendly_calendar">Review Calendly requests</a>

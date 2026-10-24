@@ -299,9 +299,9 @@ class CalendlyStore:
         cutoff = time.time() - days * 86400
         with self.db() as db:
             db.execute("DELETE FROM proposals WHERE expires<?", (time.time(),))
-            db.execute("UPDATE attempts SET private='{}',public='{}' WHERE created<?", (cutoff,))
+            db.execute("UPDATE attempts SET private='{}',public='{}' WHERE created<? AND (private!='{}' OR public!='{}')", (cutoff,))
             for call in purged_calls or []:
-                db.execute("UPDATE attempts SET private='{}',public='{}' WHERE operation=?", ("call:" + call,))
+                db.execute("UPDATE attempts SET private='{}',public='{}' WHERE operation=? AND (private!='{}' OR public!='{}')", ("call:" + call,))
 
 
 def scrub_deleted_calls(call_ids: list[str]):
