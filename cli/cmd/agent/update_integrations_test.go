@@ -41,3 +41,22 @@ func TestIntegrationBackupFailureStopsUpdate(t *testing.T) {
 		t.Fatal("unmapped state must not produce a successful backup")
 	}
 }
+
+func TestIntegrationBackupWithoutStateDoesNotNeedPython(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("CALENDLY_DB_PATH", "")
+	t.Setenv("CALENDLY_TOKEN_PATH", "")
+	root := t.TempDir()
+	if err := backupIntegrationState(root, filepath.Join(root, "backup")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIntegrationBackupWithStateRequiresRuntime(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("CALENDLY_DB_PATH", "data/custom.db")
+	root := t.TempDir()
+	if err := backupIntegrationState(root, filepath.Join(root, "backup")); err == nil {
+		t.Fatal("state must not be silently skipped without Python")
+	}
+}

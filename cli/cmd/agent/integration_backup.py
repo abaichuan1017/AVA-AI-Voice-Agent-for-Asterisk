@@ -19,13 +19,22 @@ def backup(root, destination):
     try:
         relative_destination = destination.relative_to(supplied_root)
     except ValueError:
-        relative_destination = destination.relative_to(root)
-    destination = root / relative_destination
+        try:
+            relative_destination = destination.relative_to(root)
+        except ValueError:
+            relative_destination = None
+    if relative_destination is not None:
+        destination = root / relative_destination
+    else:
+        info = destination.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise ValueError("external destination must be private and owned")
+        destination = destination.resolve()
 
     def within(path, parent):
         return os.path.commonpath((str(path), str(parent))) == str(parent)
 
-    if destination.is_symlink() or not within(destination.resolve(), root):
+    if destination.is_symlink() or (relative_destination is not None and not within(destination.resolve(), root)):
         raise ValueError("unsafe backup destination")
 
     def private_directory(path):

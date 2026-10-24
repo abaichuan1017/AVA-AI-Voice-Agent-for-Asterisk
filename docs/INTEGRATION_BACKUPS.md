@@ -12,8 +12,12 @@ Each preservation pass creates a separate private `integration-state.*` director
 inside the normal backup tree. An overwrite-mode refresh does not overwrite the
 earlier snapshot. Failed/partial snapshots are not a completed recovery set.
 
-Python 3.7+ with SQLite's backup API is required on the update host when a journal
-exists. If the host cannot read the journal, make a private, verified snapshot
+Python 3.7+ with SQLite's backup API is required wherever the helper runs when
+integration state exists (journal, managed secrets or configured overrides).
+The new updater image includes this runtime. Rebuild an older updater from the
+target source or select the target release image before UI updates; old images
+cannot gain Python through CLI self-update. The CLI skips the helper when no
+integration state exists, even without Python. If the host cannot read the journal, make a private, verified snapshot
 using the application's Python/SQLite runtime and resolve host compatibility before
 retrying; do not bypass the failure or replace it with a raw live-file copy.
 An old CLI does not gain this behavior merely by checking out new source. Use the

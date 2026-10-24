@@ -123,3 +123,38 @@ def test_existing_backup_is_never_overwritten(tmp_path):
     (secrets / "key").write_text("second")
     assert run_backup(tmp_path).returncode != 0
     assert (tmp_path / "backup/secrets/key").read_text() == "first"
+
+
+def test_real_recovery_layout_retains_both_preservation_passes(tmp_path):
+    root = tmp_path / "checkout"
+    (root / "secrets").mkdir(parents=True)
+    (root / "secrets/key").write_text("synthetic")
+    recovery = tmp_path / "recovery/pre-update-files"
+    recovery.mkdir(parents=True, mode=0o700)
+    script = tmp_path / "recovery.sh"
+    script.write_text((ROOT / "scripts/update-recover.sh").read_text().replace('\nmain "$@"\n', "\n"))
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; REPO="$2"; backup_integration_state "$3"; backup_integration_state "$3"',
+         "_", str(script), str(root), str(recovery)],
+        capture_output=True, text=True, timeout=40,
+    )
+    assert result.returncode == 0, result.stderr
+    snapshots = list(recovery.glob("integration-state.*"))
+    assert len(snapshots) == 2
+    assert all((entry / "secrets/key").read_text() == "synthetic" for entry in snapshots)
+
+
+def test_external_backup_destination_must_be_private(tmp_path):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    destination = tmp_path / "public-output"
+    destination.mkdir(mode=0o755)
+    assert run_backup(root, destination).returncode != 0
+    destination.chmod(0o700)
+    assert run_backup(root, destination).returncode == 0
+
+
+def test_updater_image_supplies_the_required_backup_runtime():
+    dockerfile = (ROOT / "updater/Dockerfile").read_text()
+    assert "    python3 " in dockerfile
+    assert "hasattr(sqlite3.Connection, 'backup')" in dockerfile
