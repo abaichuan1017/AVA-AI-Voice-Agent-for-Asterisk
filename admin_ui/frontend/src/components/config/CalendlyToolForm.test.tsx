@@ -38,7 +38,6 @@ describe('Calendly guided setup', () => {
             : request(r));
         render(<CalendlyToolForm config={{}} onChange={vi.fn()} onSave={vi.fn()} />);
         await screen.findByText(/Alex · UTC/);
-        await userEvent.click(screen.getByRole('button', { name: 'Refresh pending requests' }));
         expect(await screen.findByText('request-ref-123')).toBeInTheDocument();
     });
     it('requires a candidate token for a first connection and allows checking a saved connection while paused', async () => {
@@ -51,7 +50,7 @@ describe('Calendly guided setup', () => {
         expect(verify).toBeEnabled();
         await userEvent.clear(screen.getByLabelText('Personal access token'));
         expect(verify).toBeDisabled();
-        expect(vi.mocked(axios.request)).not.toHaveBeenCalled();
+        expect(vi.mocked(axios.request).mock.calls.some(([r]) => r.url?.endsWith('/connection/verify'))).toBe(false);
         form.unmount();
         vi.mocked(axios.get).mockResolvedValue({ data: { ...connection, enabled: false } });
         render(<CalendlyToolForm config={{}} onChange={vi.fn()} onSave={vi.fn()} />);
@@ -175,4 +174,16 @@ it('keeps setup operations separate across appointments and remount, and cleans 
     await userEvent.click(screen.getByRole('button', { name: 'Start another setup test after cleanup' }));
     expect(sessionStorage.getItem(a)).toBeNull();
     expect(sessionStorage.getItem(b)).toBe('setup:appointment-b');
+});
+
+
+it.each([null, {}, 'invalid'])('shows a recovery-load error for malformed attempts %j', async value => {
+    mock();
+    const original = vi.mocked(axios.request).getMockImplementation()!;
+    vi.mocked(axios.request).mockImplementation(async r => r.url?.endsWith('/attempts') ? { data: value } : original(r));
+    render(<CalendlyToolForm config={{}} onChange={vi.fn()} onSave={vi.fn()} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load pending Calendly requests');
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh pending requests' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('This action could not be confirmed');
+    expect(screen.getByRole('button', { name: 'Refresh pending requests' })).toBeEnabled();
 });

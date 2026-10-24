@@ -55,7 +55,10 @@ class CalendlyCalendarTool(Tool):
                 conn, _ = await service.credentials(admission=True)
                 entries = []
                 for key in allowed:
-                    value = service.binding(cfg, key, conn)
+                    try:
+                        value = service.binding(cfg, key, conn)
+                    except CalendlyError:
+                        continue  # Incomplete/denied entries grant no access to this agent.
                     entries.append({"key": key, "name": str(value.get("name") or key)[:200], "duration_minutes": value.get("duration")})
                 return {"status": "success", "appointment_types": entries}
             if parameters.get("action") == "get_available_slots":

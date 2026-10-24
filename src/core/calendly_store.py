@@ -272,6 +272,11 @@ class CalendlyStore:
                 raise CalendlyError("check_not_due")
             if not manual and row["passes"] >= 3:
                 raise CalendlyError("check_limit")
+            connection = db.execute("SELECT value FROM connection WHERE id=1").fetchone()
+            if connection and json.loads(connection[0]).get("cooldown", 0) > now:
+                # Check inside the lease transaction too: a cooldown can start
+                # after due() ran, or a manual check can bypass that lookup.
+                raise CalendlyError("rate_limited")
             passes = row["passes"] + (0 if manual else 1)
             delay = 30 if manual else (30 if passes == 1 else 120)
             db.execute("UPDATE attempts SET state='uncertain',lease=?,passes=?,checks=checks+1,next_due=? WHERE id=?", (now + 25, passes, now + delay, key))
@@ -280,8 +285,12 @@ class CalendlyStore:
             return row
 
     def due(self) -> list[str]:
+        now = time.time()
         with self.db() as db:
-            return [r[0] for r in db.execute("SELECT id FROM attempts WHERE state IN ('submitting','uncertain') AND lease<? AND next_due<? AND passes<3 LIMIT 10", (time.time(), time.time()))]
+            connection = db.execute("SELECT value FROM connection WHERE id=1").fetchone()
+            if connection and json.loads(connection[0]).get("cooldown", 0) > now:
+                return []
+            return [r[0] for r in db.execute("SELECT id FROM attempts WHERE state IN ('submitting','uncertain') AND lease<? AND next_due<? AND passes<3 LIMIT 10", (now, now))]
 
     def resolve(self, key: str, actor: str, note: str):
         with self.db() as db:

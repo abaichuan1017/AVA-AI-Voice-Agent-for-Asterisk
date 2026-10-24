@@ -788,3 +788,46 @@ async def test_recovery_failures_are_isolated_and_cancellation_propagates(tmp_pa
     else: assert calls[-2:] == ['bad', 'good']
     if fault == 'due': assert calls.count('due') == 2
     assert 'private diagnostic' not in caplog.text and 'test@example.com' not in caplog.text
+
+
+@pytest.mark.parametrize('manual', [False, True])
+async def test_local_cooldown_preserves_recovery_budget_and_resumes_after_expiry(setup, monkeypatch, manual):
+    store, service, fake, cfg = setup
+    store.update_connection(store.connection()['revision'], qualified=True)
+    fake.lost = True
+    result = await service.book(cfg, 'call:one', await propose(service, fake, cfg))
+    key = result['attempt_reference']
+    await due(store, key)
+    assert store.due() == [key]
+    store.observe_cooldown(store.connection(), 3600)  # Can race after due selection.
+    before = store.attempt(key)
+    reads = len(fake.calls)
+    for _ in range(4):
+        assert store.due() == []
+        with pytest.raises(CalendlyError, match='rate_limited'):
+            await service.reconcile(key, manual=manual)
+    after = store.attempt(key)
+    assert [(after[k], before[k]) for k in ['state', 'passes', 'checks', 'next_due', 'lease']] == [(before[k], before[k]) for k in ['state', 'passes', 'checks', 'next_due', 'lease']]
+    assert len(fake.calls) == reads and fake.posts == 1
+    future = store.connection()['cooldown'] + 1
+    monkeypatch.setattr('src.core.calendly_store.time.time', lambda: future)
+    assert store.due() == [key]
+    assert (await service.reconcile(key, manual=manual))['reservation_status'] == 'confirmed'
+    assert fake.posts == 1 and store.attempt(key)['passes'] == (0 if manual else 1)
+
+
+@pytest.mark.parametrize('invalid', [{'one_to_one_confirmed': False}, {'connection_id': 'other'}])
+async def test_incomplete_appointment_does_not_hide_valid_agent_appointments(setup, monkeypatch, invalid):
+    from src.tools.business import calendly_calendar as native
+    from src.tools.context import ToolExecutionContext
+    store, service, fake, cfg = setup
+    cfg['appointments']['incomplete'] = {**cfg['appointments']['consultation'], **invalid}
+    monkeypatch.setattr(native, 'CalendlyStore', lambda: store)
+    monkeypatch.setattr(native, 'CalendlyService', lambda _: service)
+    context = ToolExecutionContext(call_id='list-mixed', config={'tools': {'calendly_calendar': cfg}})
+    tool = native.CalendlyCalendarTool()
+    result = await tool.execute({'action': 'list_appointment_types'}, context)
+    assert result['status'] == 'success' and [v['key'] for v in result['appointment_types']] == ['consultation']
+    denied = await tool.execute({'action': 'get_available_slots', 'appointment_key': 'incomplete', 'timezone': 'UTC'}, context)
+    assert denied['status'] == 'error' and denied['code'] == 'appointment_setup_incomplete'
+    assert fake.posts == 0

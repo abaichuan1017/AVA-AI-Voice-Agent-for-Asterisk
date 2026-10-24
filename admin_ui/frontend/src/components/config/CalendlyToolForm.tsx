@@ -44,12 +44,19 @@ export default function CalendlyToolForm({ config, onChange, onSave }: { config:
     const api = async (method: string, path: string, data?: unknown) => (await axios.request({ method, url: `/api/calendly${path}`, headers, data, timeout: 25000 })).data;
     const refresh = async () => {
         setConnection(await api('GET', '/connection'));
-        setAttempts(await api('GET', '/attempts'));
+        const rows = await api('GET', '/attempts');
+        if (!Array.isArray(rows)) throw new Error('invalid_attempts');
+        setAttempts(rows);
     };
     useEffect(() => {
         let alive = true;
         axios.get('/api/calendly/connection', { headers: { Authorization: `Bearer ${token}` } })
             .then(r => { if (alive) setConnection(r.data); }).catch(() => { if (alive) setError('Unable to load Calendly connection.'); });
+        axios.request({ method: 'GET', url: '/api/calendly/attempts', headers: { Authorization: `Bearer ${token}` }, timeout: 25000 })
+            .then(r => {
+                if (!Array.isArray(r.data)) throw new Error('invalid_attempts');
+                if (alive) setAttempts(r.data);
+            }).catch(() => { if (alive) setError('Unable to load pending Calendly requests. Refresh pending requests before checking an existing booking.'); });
         return () => { alive = false; };
     }, [token]);
     useEffect(() => { setApproved(false); }, [slot, name, recipient, answers, tz, testKey]);
