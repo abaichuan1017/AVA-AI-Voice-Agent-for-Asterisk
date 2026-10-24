@@ -1425,7 +1425,8 @@ check_secrets_permissions() {
         if [ "$APPLY_FIXES" = true ]; then
             if sudo chown -R "$CONTAINER_UID:$SHARED_GID" "$SECRETS_DIR" 2>/dev/null && sudo chmod 2770 "$SECRETS_DIR" 2>/dev/null; then
                 # Also fix any files inside
-                find "$SECRETS_DIR" -type f -exec sudo chmod 660 {} \; 2>/dev/null || true
+                find "$SECRETS_DIR" -type f ! -name 'calendly-default-token.json*' -exec sudo chmod 660 {} \; 2>/dev/null || true
+                find "$SECRETS_DIR" -type f -name 'calendly-default-token.json*' -exec sudo chmod 600 {} \; 2>/dev/null || true
                 log_ok "Fixed secrets directory permissions for containers"
             else
                 log_warn "Could not fix secrets directory permissions (may need sudo)"
@@ -1433,7 +1434,8 @@ check_secrets_permissions() {
         else
             FIX_CMDS+=("sudo chown -R $CONTAINER_UID:$SHARED_GID $SECRETS_DIR")
             FIX_CMDS+=("sudo chmod 2770 $SECRETS_DIR")
-            FIX_CMDS+=("sudo find $SECRETS_DIR -type f -exec chmod 660 {} \\;")
+            FIX_CMDS+=("sudo find $SECRETS_DIR -type f ! -name 'calendly-default-token.json*' -exec chmod 660 {} \\;")
+            FIX_CMDS+=("sudo find $SECRETS_DIR -type f -name 'calendly-default-token.json*' -exec chmod 600 {} \\;")
         fi
     else
         log_ok "Secrets directory permissions: OK (writable by containers)"

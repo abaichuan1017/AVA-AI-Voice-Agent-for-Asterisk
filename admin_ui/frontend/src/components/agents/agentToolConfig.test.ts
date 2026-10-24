@@ -2,6 +2,36 @@ import { describe, expect, it } from 'vitest';
 
 import { parseAgentConfig, serializeAgentConfig } from './agentToolConfig';
 
+describe('Calendly appointment policy matches runtime defaults', () => {
+    it('shows and preserves inherited access when no policy is stored', () => {
+        const state = parseAgentConfig({ tools_json: JSON.stringify(['calendly_calendar']) });
+        expect(state.calendlyPolicy).toBe('inherit');
+        expect(serializeAgentConfig(state).tool_configs_json).toBeNull();
+        expect(parseAgentConfig(serializeAgentConfig(state)).calendlyPolicy).toBe('inherit');
+    });
+
+    it('keeps selected-empty access across tool disable, save, reopen and re-enable', () => {
+        const state = parseAgentConfig({ tools_json: JSON.stringify(['calendly_calendar']),
+            tool_configs_json: JSON.stringify({ calendly_calendar: { appointment_policy: 'selected', appointment_keys: [] } }) });
+        state.inCallTools = [];
+        const reopened = parseAgentConfig(serializeAgentConfig(state));
+        expect(reopened.calendlyPolicy).toBe('selected');
+        reopened.inCallTools = ['calendly_calendar'];
+        const enabled = parseAgentConfig(serializeAgentConfig(reopened));
+        expect(enabled.calendlyPolicy).toBe('selected');
+        expect(enabled.calendlyKeys).toEqual([]);
+    });
+
+    it.each(['none', 'selected'])('preserves explicit %s denial instead of inheriting', policy => {
+        const state = parseAgentConfig({ tools_json: JSON.stringify(['calendly_calendar']),
+            tool_configs_json: JSON.stringify({ calendly_calendar: { appointment_policy: policy, appointment_keys: [] } }) });
+        expect(state.calendlyPolicy).toBe(policy);
+        expect(state.calendlyKeys).toEqual([]);
+        expect(JSON.parse(serializeAgentConfig(state).tool_configs_json || '{}').calendly_calendar)
+            .toEqual({ appointment_policy: policy, appointment_keys: [] });
+    });
+});
+
 
 describe('per-agent hangup marker policy', () => {
     it('round-trips an extend policy through the first-class column', () => {

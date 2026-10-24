@@ -14,7 +14,7 @@ export function ToolList({ config, query, onSelect }: { config: Record<string, {
                         <div className="divide-y divide-border">
                             {entries.map(tool => {
                                 // Match the form's defaults; calendars are opt-in.
-                                const enabled = config[tool.key]?.enabled ?? !['google_calendar', 'microsoft_calendar'].includes(tool.key);
+                                const enabled = config[tool.key]?.enabled ?? !['google_calendar', 'microsoft_calendar', 'calendly_calendar'].includes(tool.key);
                                 const Icon = tool.icon;
                                 return (
                                     <div key={tool.key} className="flex items-center gap-3 py-4">

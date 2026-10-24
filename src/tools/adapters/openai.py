@@ -327,6 +327,16 @@ class OpenAIToolAdapter:
                     "delivery diagnostics or technical errors aloud. Never claim a write succeeded without "
                     "a successful result. Continue the caller's request naturally."
                 )
+            elif function_name == "calendly_calendar":
+                response_config["instructions"] = (
+                    "Use the structured Calendly result as data and follow the business instructions. "
+                    "Do not read codes, identifiers, validation messages or internal acknowledgements aloud. "
+                    "Errors do not mean a busy slot. Ask for missing caller details naturally. "
+                    "Confirm exact email and booking details before creation. An uncertain/pending outcome "
+                    "must never be retried or bypassed using another calendar tool. Refer to staff. "
+                    "A success describes the retained original booking; it does not apply requested changes. "
+                    "Never claim invitation delivery or RSVP. Later changes use Calendly confirmation links or staff."
+                )
             elif function_name == "microsoft_calendar":
                 # Calendar results describe state and recoverable errors, not a script
                 # to read aloud. Keep data in function_call_output, out of instructions.

@@ -1480,6 +1480,15 @@ class StreamingPlaybackManager:
                 return "wait"
             # After short backoff streak, send one filler and reset the streak
             stream_info['empty_backoff_ticks'] = 0
+            if pending:
+                # A partial real frame is still speech, even after the filler
+                # idle limit. Pad and pace it normally so drain can finish.
+                # In particular, resampling may leave a single PCM16 sample.
+                frame = pending + (self._silence_byte(target_fmt) * (frame_size - len(pending)))
+                self.frame_remainders[call_id] = b""
+                return await self._emit_frame(
+                    call_id, stream_id, frame, target_fmt, target_rate, filler=False,
+                )
             # Suppress filler if prolonged idle since last real frame (prevents tail drift)
             try:
                 lri = stream_info.get('last_real_emit_ts')
@@ -1490,17 +1499,7 @@ class StreamingPlaybackManager:
             except Exception:
                 pass
             filler_byte = self._silence_byte(target_fmt)
-            if pending:
-                pending_len = len(pending)
-                frame = pending + (filler_byte * max(0, frame_size - pending_len))
-                self.frame_remainders[call_id] = b""
-                try:
-                    if pending_len:
-                        self._decrement_buffered_bytes(call_id, pending_len)
-                except Exception:
-                    pass
-            else:
-                frame = filler_byte * frame_size
+            frame = filler_byte * frame_size
             return await self._emit_frame(
                 call_id,
                 stream_id,

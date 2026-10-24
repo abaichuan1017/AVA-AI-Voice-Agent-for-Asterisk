@@ -922,7 +922,7 @@ BUILTIN_RESERVED_TOOL_NAMES = frozenset({
     "leave_voicemail", "check_extension_status",
     "send_email_summary", "request_transcript",
     "update_call_metadata",
-    "google_calendar", "microsoft_calendar",
+    "google_calendar", "microsoft_calendar", "calendly_calendar",
     # Engine-registered tool names the AI calls (may differ from config keys).
     "transfer_call", "transfer_to_queue", "live_agent_transfer",
 })
@@ -1719,6 +1719,7 @@ BUILTIN_TOOL_NAMES = (
     "request_transcript",
     "google_calendar",
     "microsoft_calendar",
+    "calendly_calendar",
 )
 _BUILTIN_TOOL_SET = frozenset(BUILTIN_TOOL_NAMES)
 
@@ -1773,6 +1774,9 @@ def _builtin_to_out(name: str, cfg: Dict[str, Any]) -> BuiltinToolOut:
     doc = tools.get(name) if isinstance(tools, dict) else None
     configured = isinstance(doc, dict)
     doc = doc if configured else {}
+    if name == "calendly_calendar":
+        from src.tools.business.calendly_client import public_config
+        doc = public_config(doc)
     return BuiltinToolOut(
         name=name,
         enabled=bool(doc.get("enabled", False)),

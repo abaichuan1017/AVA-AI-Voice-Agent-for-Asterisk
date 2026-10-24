@@ -263,6 +263,8 @@ app.include_router(calls.router, prefix="/api", tags=["calls"], dependencies=[De
 app.include_router(outbound.router, prefix="/api", tags=["outbound"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(vicidial.router, prefix="/api", tags=["outbound"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(pushover.router, prefix="/api/pushover", tags=["pushover"], dependencies=[Depends(auth.get_current_user)])
+from api import calendly
+app.include_router(calendly.router, prefix="/api/calendly", tags=["calendly"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(docs.router, tags=["documentation"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(custom_models.router, prefix="/api/custom-models", tags=["custom-models"], dependencies=[Depends(auth.get_current_user)])

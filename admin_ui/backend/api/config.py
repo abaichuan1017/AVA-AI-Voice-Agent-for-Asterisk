@@ -934,6 +934,11 @@ def _validate_ai_agent_config(content: str) -> Dict[str, Any]:
 
     # Native tool config is also saved by the normal full-document Tools/YAML flow.
     # Reject invalid shapes without returning Pydantic input values (possible keys).
+    from src.tools.business.calendly_client import validate_config as validate_calendly_config
+    try:
+        validate_calendly_config((parsed.get("tools") or {}).get("calendly_calendar"))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid Calendly configuration. Save credentials through the connection panel.") from None
     from src.integrations.pushover import PushoverToolConfig
     for block in ("tools", "in_call_tools"):
         section = parsed.get(block)
@@ -1391,6 +1396,9 @@ async def get_config():
 def _redact_websocket_media_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
     """Defensively keep an accidentally hand-written WS secret out of API reads."""
     safe = deepcopy(config)
+    if isinstance(safe.get("tools"), dict) and "calendly_calendar" in safe["tools"]:
+        from src.tools.business.calendly_client import public_config
+        safe["tools"]["calendly_calendar"] = public_config(safe["tools"]["calendly_calendar"])
     websocket_media = safe.get("websocket_media") if isinstance(safe, dict) else None
     auth = websocket_media.get("auth") if isinstance(websocket_media, dict) else None
     if isinstance(auth, dict):
