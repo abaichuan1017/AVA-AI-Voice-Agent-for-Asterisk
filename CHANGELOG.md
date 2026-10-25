@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Additive integration and operator-experience release, prepared from main cutoff
 `9b58ddbd`. Included PRs: #744, #745, #746, #755, #760, #761, #762, #763,
-#768, #769, #770, #771, #773, #774 and #772. Backup-safety prerequisite #775
-must merge before tagging; release metadata does not itself publish the tag.
+#768, #769, #770, #771, #773, #774, #772 and #775. The backup-safety prerequisite
+is merged; release metadata does not itself publish the tag.
 Open Dependabot and unrelated contributor PRs remain excluded.
 
 New functionality includes native Calendly booking, named Pushover tools,
@@ -32,15 +32,13 @@ existing attribution and co-authorship; see [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ### Security
 
-- Required prerequisite #775 preserves private credentials and a coherent Calendly
-  journal before updates, fails closed on unsafe/unreadable state and never
-  automatically restores booking state during application rollback.
-- Stage support for 7.7.x/7.6.x; 7.5.x support ends at publication. Existing 7.5.x
+- Preserve private integration credentials and a coherent Calendly journal snapshot
+  before CLI/recovery updates (#775); fail closed on unsafe or unreadable state.
+  Never automatically restore booking state during application rollback. See
+  [backup and recovery boundaries](docs/INTEGRATION_BACKUPS.md).
+- Support moves to 7.7.x/7.6.x at publication; 7.5.x support ends then. Existing 7.5.x
   HTTP-template mitigation is not a claim of a shipped backport.
 - Known dependency alerts remain documented. No blanket security-clearance claim.
-### Security
-
-- Preserve private integration credentials and a coherent Calendly journal snapshot before CLI/recovery updates; fail closed on unsafe or unreadable state. Never automatically restore booking state during application rollback. See [backup and recovery boundaries](docs/INTEGRATION_BACKUPS.md).
 
 ### Added
 - Refreshed Agents workspace with searchable cards/list views, configured-tool summaries,

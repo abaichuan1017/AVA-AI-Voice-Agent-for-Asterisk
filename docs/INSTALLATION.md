@@ -36,7 +36,7 @@ SQLite snapshots, not live main-file copies. Follow [integration backup and
 rollback safety](INTEGRATION_BACKUPS.md) and [Agents appearance recovery](AGENTS_EXPERIENCE_ROLLOUT.md).
 Use the target release CLI/pinned recovery script to obtain the new integration
 snapshots; an older installed CLI does not acquire this behavior automatically.
-The backup-safety prerequisite is tracked by PR #775 and must merge before tagging.
+The backup-safety prerequisite merged in PR #775 (`8c336951`) and is included in v7.7.0.
 The updater now needs Python 3.7+ with SQLite backup support when integration state
 exists. New updater images include it; rebuild/replace an older updater image
 before using UI-driven integration backups, or use the documented host recovery

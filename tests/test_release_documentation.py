@@ -48,5 +48,16 @@ def test_upgrade_and_migration_keep_legacy_links_and_explicit_waiver():
     assert "v764-to-v770" in anchors(migration)
     matrix = (ROOT / "docs/baselines/golden/v7.7.0-validation-matrix.md").read_text()
     assert "WAIVED explicitly for v7.7.0" in matrix
-    assert "Merge approval | HOLD" in matrix
-    assert "Tag/date | HOLD" in matrix
+    assert "Merge approval | APPROVED" in matrix
+    assert "Tag/date | APPROVED" in matrix
+    assert "Authorization is not a claim that publication completed" in matrix
+    assert "8c3369511f20e7b378a2c1a5c0ba710ada88d5b3" in matrix
+
+
+def test_publication_metadata_keeps_one_security_section_and_explicit_support_transition():
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+    release = changelog.split("## [7.7.0]", 1)[1].split("\n## [", 1)[0]
+    assert release.count("### Security") == 1
+    security = (ROOT / "SECURITY.md").read_text()
+    assert "supported trains are 7.7.x and 7.6.x" in security
+    assert "7.5.x is\nunsupported" in security

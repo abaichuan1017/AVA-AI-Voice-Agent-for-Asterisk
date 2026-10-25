@@ -27,7 +27,7 @@ Unlike v7.6.4, this release has additive state:
 
 Back up actual SQLite paths coherently, credentials, configuration and overlays.
 Use the target CLI/recovery script and [integration backup instructions](INTEGRATION_BACKUPS.md).
-PR #775 is the unmerged backup-safety prerequisite during preparation.
+The backup-safety prerequisite merged in PR #775 (`8c336951`) and is included in v7.7.0.
 Custom mounts and unsupported host SQLite require a verified manual snapshot.
 
 ### Operator workflows and limits
