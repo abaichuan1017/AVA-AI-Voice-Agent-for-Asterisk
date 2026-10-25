@@ -7,9 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.7.0] - 2026-10-24
+
+Additive integration and operator-experience release, prepared from main cutoff
+`9b58ddbd`. Included PRs: #744, #745, #746, #755, #760, #761, #762, #763,
+#768, #769, #770, #771, #773, #774, #772 and #775. The backup-safety prerequisite
+is merged; release metadata does not itself publish the tag.
+Open Dependabot and unrelated contributor PRs remain excluded.
+
+New functionality includes native Calendly booking, named Pushover tools,
+in-call HTTP summaries, opt-in Teams meetings and the refreshed Agents workspace.
+There are additive Agent appearance columns and a Calendly integration journal;
+existing provider/model/transport/Audio Profile defaults remain unchanged.
+See [migration](docs/MIGRATION.md#v764-to-v770),
+[integration backups](docs/INTEGRATION_BACKUPS.md), and the
+[validation matrix](docs/baselines/golden/v7.7.0-validation-matrix.md).
+
+Contributors: [@pcbeingused333](https://github.com/pcbeingused333) (CLI/pipeline
+code and tests), [@hkjarral](https://github.com/hkjarral) (implementation and
+maintenance), [@lucamancusodev](https://github.com/lucamancusodev) (reports and
+requirements), [@pi0n00r](https://github.com/pi0n00r) (greeting/discovery proposals),
+and [@MVECoder](https://github.com/MVECoder) (announcement report). Preserve
+existing attribution and co-authorship; see [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
 ### Security
 
-- Preserve private integration credentials and a coherent Calendly journal snapshot before CLI/recovery updates; fail closed on unsafe or unreadable state. Never automatically restore booking state during application rollback. See [backup and recovery boundaries](docs/INTEGRATION_BACKUPS.md).
+- Preserve private integration credentials and a coherent Calendly journal snapshot
+  before CLI/recovery updates (#775); fail closed on unsafe or unreadable state.
+  Never automatically restore booking state during application rollback. See
+  [backup and recovery boundaries](docs/INTEGRATION_BACKUPS.md).
+- Support moves to 7.7.x/7.6.x at publication; 7.5.x support ends then. Existing 7.5.x
+  HTTP-template mitigation is not a claim of a shipped backport.
+- Known dependency alerts remain documented. No blanket security-clearance claim.
 
 ### Added
 - Refreshed Agents workspace with searchable cards/list views, configured-tool summaries,
