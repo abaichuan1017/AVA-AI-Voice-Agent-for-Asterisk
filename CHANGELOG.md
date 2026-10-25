@@ -38,6 +38,9 @@ existing attribution and co-authorship; see [CONTRIBUTORS.md](CONTRIBUTORS.md).
 - Stage support for 7.7.x/7.6.x; 7.5.x support ends at publication. Existing 7.5.x
   HTTP-template mitigation is not a claim of a shipped backport.
 - Known dependency alerts remain documented. No blanket security-clearance claim.
+### Security
+
+- Preserve private integration credentials and a coherent Calendly journal snapshot before CLI/recovery updates; fail closed on unsafe or unreadable state. Never automatically restore booking state during application rollback. See [backup and recovery boundaries](docs/INTEGRATION_BACKUPS.md).
 
 ### Added
 - Refreshed Agents workspace with searchable cards/list views, configured-tool summaries,
