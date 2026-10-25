@@ -1254,7 +1254,7 @@ and Local AI logs:
 
 | Stage | Evidence and relevant adapter option |
 | --- | --- |
-| Socket opening/authentication | `Opening local adapter session`; inspect the effective `ws_url` and `connect_timeout_sec` |
+| Socket opening/authentication | `Opening local adapter session`; when authentication is configured, look for `Local adapter authenticated` or `Local adapter auth failed`; inspect the effective `ws_url` and `connect_timeout_sec` |
 | Mode negotiation | `Local adapter set_mode sent`, then `Local adapter handshake complete`; the acknowledgement wait uses `handshake_timeout_sec`, defaulting to at least five seconds |
 | Audio/transcription | Confirm audio reaches the selected STT adapter and a transcription follows, rather than treating the connection alone as proof |
 
