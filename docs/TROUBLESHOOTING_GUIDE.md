@@ -1256,7 +1256,8 @@ and Local AI logs:
 | --- | --- |
 | Socket opening/authentication | `Opening local adapter session`; when authentication is configured, look for `Local adapter authenticated` or `Local adapter auth failed`; inspect the effective `ws_url` and `connect_timeout_sec` |
 | Mode negotiation | `Local adapter set_mode sent`, then `Local adapter handshake complete`; the acknowledgement wait uses `handshake_timeout_sec`, defaulting to at least five seconds |
-| Audio/transcription | Confirm audio reaches the selected STT adapter and a transcription follows, rather than treating the connection alone as proof |
+| STT audio/transcription | Confirm audio reaches the selected STT adapter and a transcription follows; an open connection alone does not prove transcription works |
+| TTS synthesis | Confirm the selected TTS adapter receives text and returns synthesized audio; an open connection alone does not prove synthesis works |
 
 `Local adapter handshake not confirmed; proceeding without mode_ready` means
 the mode acknowledgement was not confirmed; the current adapter logs the warning
